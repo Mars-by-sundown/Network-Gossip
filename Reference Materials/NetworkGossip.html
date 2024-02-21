@@ -1,0 +1,442 @@
+<html> <head> <title> CSC435 Distributed Systems--Elliott </title> </head>
+
+<!-- 2023-02-18: GossipC.html Version C -->
+
+<body style="background-color:rgb(100, 100, 100)">
+<FONT FACE="Cambria" SIZE=1>
+
+3.1 Updates:
+<ol>
+<li> 2023-10-05: Exposed TII reports for this assignment.
+</ol>
+
+<FONT FACE="Cambria" SIZE=3>
+
+<center> <h1>CSC435 Distributed Systems<br>
+Gossip Calculations using UDP<br> <br>
+Professor Clark Elliott<br>
+</h1>
+Copyright (c) 2023 by Dr. Clark Elliott with all rights reserved.<p>
+
+NOTE: UNDER CONSTRUCTION&mdash;This program will undergo minor adminstration changes for two submissions.
+</center>
+
+
+<!--
+<center>
+<h1> Gossip Calculations using UDP </h1>
+<h2> Copyright 2023 by Clark Elliott with all rights reserved. </h2>
+</center>
+-->
+<br> <br>
+<h2> Precisely named submission files:</h2>
+
+<ul>
+<li> <b> Gossip.java.txt </b> (Includes GossipLog.txt and GossipPosts.txt as Java comments at the bottom of the
+  source code).
+<li> <b> <a href=ChecklistGossip.html> ChecklistGossip.html </a> </b>
+</ul><br>
+
+
+<h2> Summary: </h2>
+
+Implement a fully distributed gossip algorithm for calculating or discovering (a) the average value in the
+network, (b) the size of the network, (c) the maximum and minimum values in the network and then some other
+gossip functions.  Use UDP and serialized Java Objects exclusively for network communications. Nodes may
+only gossip with immediate neighbors (by node number). This is a relatively easy assignment to start, so at
+least partial credit should be within reach of everyone.<p>
+
+<br>
+
+<a href=GossipStarter.java> GossipStarter.java </a> &larr;You are free to use this utility code (only!)
+however you like, if you wish, to get started. I strongly recommend that you TYPE IN THIS CODE if you are
+not yet fully comfortable with network programming.
+
+<h2> Administration: </h2>
+<ul>
+
+<p><li> Submit your two precisely named, required files to D2L before the deadline. No late
+submissions accepted for credit.
+
+<p><li> Complete at least two posts (questions, answers, commentary, useful annotated links) on
+Gossip on the forums. Easy! Include as Java comments at the bottom of your source code.
+
+<p><li> Use copy and paste to gather sample output from one or more node consoles for your log
+file showing the console commands you have implemented. Include as Java comments at the bottom of your
+    source code.
+
+<p><li> In the usual way, we will not grade assignments with more than 30% TII
+    overlap flagging for credit. (Note: under 30% might still indicated
+    plagiarism! Write your own code an dcomments).
+
+<!--<p><li> For this assignment, we use plagiarism checkers, but we do NOT expose the results to students. As
+    long as you write your own code you will be fine.-->
+
+</ul><br>
+
+<h2> Features of the assignment: </h2>
+
+<ul>
+
+<p><li> There is no central control node. All nodes are equal and run from exactly the same code. Node
+    number is determined by an argument passed to the JVM at run time.
+
+<p><li> You must implement <i> at least </i> two threads at each node, because you must always be ready to
+    accept console input from a user, and also, in the background, perform network gossip calcuations. That
+    is, when performing the work of a gossip cycle, your acceptance of console input must remain active. You
+    can have as many threads of excution as you like.
+
+<p><li> Each node should be started in its own terminal window, so you don't go nuts trying to keep the
+    console output straight. (This is how we will run your system.)
+
+<p><li> Nodes are started from the command line, and stopped by either Delete, or Kill (see below).
+
+<p><li> Gossip takes place in <i> Gossip Cycles </i> wherein a viral gossip session takes place,
+changing values throughout the network, then ends. Once a Gossip Cycle ends, a new one can be
+triggered from the console of any network node.
+
+<p><li> Create an object to contain local values at your node (e.g., the stored data value, the
+    currently-known minimum and maximum values, the current average, the current average for calculating
+    size, number of cycles...) and another object to send and receive information from other nodes during a
+    gosssip cycle.
+
+<p><li> One of the more difficult design aspects is that, as is true with all distributed systems, there is
+    no global clock and there is no shared memory space. During a gossip cycle, all nodes might be sending
+    and receiving at the same time, all the time and your algorithm must coordinate everything in a
+    distributed way.
+
+<p><li> All nodes have a Node ID (0-9), a random, permanent (unless recalculated) local data value (integer,
+0-99), a Size value (integer with a default always set to zero at the start of a cycle), an Average Value
+(changes as this is calculated during a cycle), and a Cycle Number from the beginning of time. Additionally,
+you can keep many other local values.
+
+<p><li> We will test the system with up to ten nodes with ID numbers 0-9, assigned by first
+argument at startup (see below), in any order, with any number of nodes, and any ID
+numbers. However, you are free to set your system to work with an unlimited number of nodes.
+
+<p><li> For simplicity, we will test all code on localost only.
+
+<p><li> The UDP server port numbers used start at 48,100 and are made unique by adding the Node
+ID number. E.g., for Node7 the server port number will be 48,107. (See the sample code from the
+Blockchain assignment that gives Java code for this.)
+
+<p><li> The system is undefined if two nodes are started with the same ID number. This means
+you can implement whatever behavior you like, including, for example, (a) determining a free
+Node number using a gossip protocol and using that instead, (b) allowing the system to blow up
+or act in strange ways, (c) issuing a warning and terminating the process, or (d) any other
+behavior you prefer. In other words, don't worry about it unless you want to have some bragging
+rights fun.
+
+<p><li> The local data bucket at each node is assigned a random integer value from 0-99 at startup.
+
+<p><li> Nodes may only communicate with neighbor nodes with ID numbers that are one greater or
+one less. For example, Node7 may only communicate with Node6 and Node8.
+
+<p><li> Use the viral gossip algorithms from Van Steen and Tanenbaum to calculate network size and average
+network value. Briefly: For average, nodes calculate the average with each neighbor node repeatedly,
+replacing their current average (both nodes the same). Example Node7 average is 5, Node8 average is 7, after
+the swap, both have average 6. For size of network, the trigger node starts with 1, all others start with
+0. Calculate the average for THIS value (0s and a single 1). Take the reciprocal (e.g., for average of 0.25,
+1/0.25 = 4, so network size is 4).
+
+<p><li> Networks (and partitioned sub-networks) are formed exclusively of nodes with consecutive node IDs.
+
+<p><li> The whole system may be split into two or more partitions (unconnected sub-networks) either at
+startup or when nodes are deleted, based entirely on the currently active node IDs (0-9). For
+example, active nodes 2,3,4,5 would compose a single network. Active nodes 0,2,3,5,6,8,9 would
+have four partitions into sub-networks, with each acting independently. If we later added node
+7 we would have three sub-networks.
+
+<p><li> Use only UDP/IP datagrams, clients and servers for communication.
+<!--
+ You can get some tips
+on <a
+href="http://www.coderpanda.com/java-socket-programming-transferring-java-object-through-socket-using-udp/">
+Coderpanda: sending and receiving Java Objects via UDP </a> at the link. Here is the same code,
+reformatted: <a href=UDPSocketServer.java> UDPSocketServer.java </a> and <a
+href=UDPSocketClient.java> UDPSocketClient.java </a> There are many, many examples of UDP to
+get you started. You are free to use this starter code for UDP, but I strongly recommend that
+heavily adapt it because much of it is not needed.
+-->
+
+<p><li> Nodes must both send and recieve datagram (UDP) packets to communicate with one another (and, as
+    above, this must not interfere with console input).
+
+<p><li> Marshal all data as Java Serializable Objects, using Object Streams. (See ColorServer)
+
+<p><li> Console commands may be entered at any node, at any time. (See below.)
+
+<p><li> Nodes are started as follows: "java Gossip 7" which would start the Node7 process.
+
+<p><li> Nodes can be started and deleted at any time. (Start from the command line, delete from
+the console).
+
+<p><li> During any Calculate Cycle, stop gossiping with any neighbor when N messages have been
+sent. N is set by default to 20. You will need to store the value of N locally.
+
+</ul> <br>
+
+<h2> Console commands to be implemented: </h2>
+
+All responses are printed on the ONE console, or ALL the consoles in the Gossip [sub-]network as
+indicated. For EACH of the following <b> preceed all other output with The Local Node ID.</b> MAKE YOUR
+OUTPUT SUCCINCT, ONE LINE (or fewer) per piece of information when possible. At the end of the output, print
+at least a blank line to make <b> reading the console output easy</b>.
+
+<ul> 
+
+<p><li> t (Tell us all of the commands available [i.e., that YOU have implmeneted] at the
+console as a list, one command per line with character trigger, and
+    description, like <i>this</i> list.) LOCAL NODE
+
+<p><li> l (Display the Local Values at this node: Node Value / Anything else you
+want. Label each value.) Display on ALL NODES.
+
+<p><li> p (Set up a "ping" function to check whether there is a neighbor node at
+    the port above and the port below. Display the results on the console,
+    including the node numbers. You may find this useful for implementing other
+    methods. Hint: Boolean methods: IsNodeAbove / IsNodeBelow.) LOCAL NODE.
+
+<p><li> m (Display the minimum value and maximum value currently in the network, along with the
+Node ID associated with each of them. You must determine these values with gossip. Note that you have to
+    retrieve these values from the [sub-]netowork each time because the network configuration can change at
+    any moment by starting and stopping nodes.) ALL NODES
+
+<p><li> a (Calculate the average of all the local values in the [sub-]network. Display on ALL NODES,
+preceded by Local Node ID and Local Node Value).
+
+<p><li> z (Calculate the current [sub-]network size. Display on ALL NODES.
+
+<p><li> v (Create new random values throughout the network at each node. Display the old value
+and the new value on each node.) ALL NODES.
+
+<p><li> d (Delete the current node. Fully stop the process. Be sure to gracefully close the socket [this is
+non-trivial; see HostServer], so that we can restart a node later at the same node ID and port number.)
+Hint: If you are using a worker thread, you might want to implement this graceful full close by connecting
+to your own listening port to "wake up" your listener so you can actively close it. LOCAL NODE.
+
+<p><li> k (Kill the entire network&mdash;be careful, you may need nodes to hang around for a
+while to pass along viral gossip with the kill message!) ALL NODES.
+
+<p><li> y (Display the number of cycles since the beginning of time on every node in the
+network. Note that this may not be the same on all consoles if two sub-networks have been joined.) ALL NODES.
+
+<p><li> N (N is an integer. Set the number of gossip messages for the entire
+    [sub-]network that can be sent to the same neighbor during any one
+    cycle. For example: "15" would limit the messages to 15.) Note that it
+    is possible that when sub-networks have been joined, nodes will have
+    different values of N.
+
+<p><li> Extra command A of your own choosing that you implement (not required).
+
+<p><li> Extra command B of your own choosing that you implement (not required), etc.
+
+</ul> <br>
+
+<h2> Design considerations: </h2>
+
+<ul>
+
+<p><li> Although the system ultimately is not overly complicated, it will require some serious design
+thought ahead of time before you start coding. I strongly recommend that you use pencil and paper, and some
+blue-sky (creative) thinking before you start writing code. DISTRIBUTED SYSTEMS CODE CAN GET VERY COMPLEX IN
+A HURRY. We have all sorts of timing and communication issues to deal with. There is no global clock. There
+is no central shared memory. For this system, there is no "central server" because all nodes are equal.
+
+
+<p><li> Yet another challenging design problem is that all these nodes may be gossiping at the same
+time. You may have gossip going out to one neighbor or another, and <i> at the same time </i> you might have
+both of those neighbors sending gossip back in to your current node. Everyone is talking all at once!
+
+<p><li> Because there may be more than one gossip cycle going on at once, you may want to uniquely identify
+gossip cycles with a unique identifier that is included in every communication data object sent as part of
+that cycle. For example, if you are calculating an average, you need to make sure that the trade and caculate
+the average takes place at BOTH nodes as a multi-part transaction. There are several ways you could do this:
+(a) generate a UUID and insert that into your initial gossip trigger object that is sent, (b) use a two-part
+identifier: (1) the node ID of the initiator, and (2) a counter at that node, and insert that into the
+object that is sent.
+
+<p><li> It is a good idea to build a series of small programs trying out your ideas, then integrate them
+later in your full program. For example: starting your process with the right port used for UDP
+communication; trading values with a nearby node; parsing console commands; running a listener (at least
+one) thread AND a console input thread at the same time; communicating shared values among your various
+threads of execution; determining what the console input is (including a range of integrers for N); etc.
+
+<p><li> With UDP you will have to extract the IP address and Port number (reply address) from the datagram
+packet if you are going to send a reply. When trading values with a neighbor, you must treat the trade as a
+complete transaction and handle all the coordination yourself.
+
+<p><li> Your <b> communication data object </b> will likely have a collection of various values and coordination
+flags in it. For example you probably want to send your current local value, your currently known minimum
+and maximum along with the node ID associated with each of them, and so on.
+
+<p><li> You will need the reply address, for example to calculate an <i> average </i> value with neighboring nodes.
+
+<p><li> You may want to implement the concept of "Trade Values" or "Calculate Neighbor Average" which will
+require a request and a response from each neighbor. Keep in mind that, e.g., Node7 may be requesting a
+trade of data with Node8 at the same time Node8 is requesting a trade of data with Node7, AND Node6 is
+requesting a trade of data with Node7. Each trade / average exchange must complete before you start another
+one. Do you need to implement a critical section? Note, for the calculation of newtork average, you cannot
+use a "send only" algorithm, because the total sum of all values must remain constant: if you install the
+average of the two values at one node, you must also install the average at the other node as well.
+
+<p><li> If you wish, for coordination you can make use of even and odd nodes. (E.g., only odd
+nodes initiate trade / average procedures.)
+
+<p><li> UDP will usually not signal an error if there is no server listening at the address/port you
+have sent a package to. Does your logic require that you know whether you have upper and lower
+neighbors? If so, you will probably need to write a "ping" function: Node N sends a "ping" to
+neighbors node N+1 (and N-1) and expects to get a response saying "I'm alive." If no response
+comes back, you can assume there is no node there.
+
+<p><li> Another challenging problem is in knowing when a gossip cycle is complete, and that it is now time
+to display data on the console of the local process.
+
+<p><li> You will have to handle the edge case for Node0 which should not look for Node-minus1).
+
+<p><li> You may have to be clever about resetting flags to "ready" once a cycle is over and you
+have displayed information on the console. E.g., for caluclating the size of the network.
+
+<p><li> When nodes are deleted, the partitioned sub-networks should still operate independently.
+
+<p><li> When missing nodes are added, a joined network should now operate as a whole. So, you can't simply
+check once at startup for neighbors above and neighbors below. You have to check every time. Or, if you like
+you can always assume there are two neighbors (UDP doesn't care if it never arrives), then deal with replies
+as you get them.
+
+<p><li> QUESTION: We will test your system by running one cycle at a time. How would you have to design
+your system if we were to allow many overlapping gossip sessions to take place at the same
+time? (Hint: instead of a collection of values in a single local object, you might want to
+consider an array of objects, each with a full set of local values, identified by a particular
+gossip cycle number [UUID?])
+
+
+<p><li> QUESTION: It is trivial to accept another argument from the command line, such as with the secondary
+server for JokeServer. It is trivial to send UDP packets to a real IP address and port (instead of just the
+localhost loopback address). But what other (major?) design changes would we have to make for our Gossip
+Network to run on various nodes anywhere on the Internet?
+
+</ul><br>
+
+<h2> Grading your system </h2>
+
+<ul>
+
+
+<p><li> Compile your code from the command line by issuing "javac Gossip.java" twice. Only after everything
+    is fully running, with no more changes, copy your source code to Gossip.java.txt 
+
+<p><li> Copy your GossipLog.txt file and your two (or more) scholarly postings to the Gossip forum to the
+    bottom of your Gossip.java file, as java comments.
+
+<p><li> Turn in your single, commented, Gossip.java.txt file, and your single ChecklistGossip.html file.
+
+
+<p><li> In Windows we will run, for example, the following bat file (modified for Mac / Unix) (or similar):
+
+<pre>
+start java Gossip 4
+start java Gossip 2
+start java Gossip 5
+start java Gossip 6
+start java Gossip 1
+</pre><p>
+
+This will give us two sub-networks: 1,2 and 4,5,6
+
+Later we might issue (or similar)...
+
+<pre>
+start java Gossip 3
+</pre><p>
+
+..at which point we will have a single network.<p
+
+Note: we will use any configuration of node ID numbers we like in any order. This is jus an example.
+
+<p><li> Run your system, trying all the functions.
+
+<p><li> Read your code, including checking for plagiarism.
+
+<p><li> Read your pedagogical COMMENTS in the program.
+
+<p><li> Verify all the checklist features listed as "yes".
+
+<p><li> Read your posts.
+
+<p><li> Read your log file output.
+
+</ul><br>
+
+<h2> Suggested development order:</h2>
+
+Write a collection of small utility programs, one per sub-directory. This is "throw-away"
+code, designed only for you to learn the techniques. In general, you will want to print out
+information on the consoles of the various processes as a result of these untility methods.
+
+<ul>
+
+<p><li> Start up multiple processes with different arguments to set the Node ID. Create a
+script to do this so you can easily create several processes (each in its own terminmal window) at once.
+
+<p><li> Write the "t" function to display on the console (tell us) the different different
+functions you will have implemented. For now, use a dummy method for each one, so if we enter "c" for
+example, the method only tells us that we "Will get a calculate function here."
+
+<p><li> Write some UDP client and server code to make sure you know how UDP works. Send some
+data back and forth. The protocol is simple, but you may not have done this before so there is a ramp-up
+    period to get used to it. TYPE IN MY SAMPLE UDP CODE?? (Recommended!)
+
+<p><li> Next you will need to asynchronously start your listener in a separate thread, then
+continue in the current thread to listen for commands. (See the JokeServer for the Admin logic,
+except adapt it to accept console commands rather than admin connections.) Your UDP
+listener/server will always be active and processing all incoming data.
+
+<p><li> Implement a "ping" between two processes, initiated by console input, to see which
+neighbors are present.
+
+<p><li> Write the random value code to create a new random local data value (0-99) for the local node only (small steps!).
+
+<p><li> Write the random value code to create a new random local data value (0-99) for ALL nodes. Because
+    this is a "send only" gossip function, it may be easiest to implement this one first.)
+
+<p><li> Write a MinMax method so that each node keeps an updated minimum network value, and
+maximum network value. Each node sends the values to each of its neighors repeatedly, until you
+have decided that the cycle is over. When a node gets a greater value than the max, it is
+replaced. When it gets a lesser value than the min it is replaced. This also can be implemented as a "send
+    only" gossip function.
+
+<p><li> Write a "trade" method so that two nodes trade local data values and store the <i> average </i> of
+the two values locally on each node in the local data object.
+
+<p><li> Figure out how to determine when a Gossip Cycle is complete and test it. For example,
+in each cycle you might only be allowed to send 20 messages to any one neighbor, and when this
+is done for both neighbors, for all nodes, the Gossip Cycle is over.
+
+<p><li> Write the method to calculate the <b> average value </b> of the network (see trade above).
+
+<p><li> Write the method to calculate the <b> size </b> of the network.
+
+<p><li> Write the method to gracefully delete (kill off) the current node. Be sure to close the UDP listener
+socket first, if you can. (See HostServer which shows how to "reach back" and close an identified socket.)
+See above re. sending a "wake up so you can die" message to your own listener.
+
+<p><li> Write the gossip method to kill off ALL the nodes in the network. Be careful: you may
+need a node to stay alive long enough to pass on the kill message to other nodes.
+
+<p><li> Etc. Then, start combining your small utility code into the full program you have designed.
+
+</ul>
+
+<h2> Commentary: </h2>
+
+Unlike TCP, UDP never establishes a connection. Once you send a datagram packet off to the network, there is
+no certain way to know it arrives unless you, yourself, arrange for an ack from the destination. What this
+means, in practice, is that if no one is listening at that destination, you might not know it. (Some of the
+time you might get a "destination unreachable" ICMP message from the last router in the chain, but you
+shouldn't count on this.)<p>
+
+You might want to review our discussions of request / reply / acknowledge protocols which might be useful in
+your design. <p>
+
+</body></html>
