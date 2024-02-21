@@ -10,14 +10,12 @@ import java.net.*;
 
 
 class GossipData implements Serializable {
-    int nodeID; //unique id of the node
+    int nodeID; //unique id of the sending node
     int average; //current average of network
     int highestVal; //highest value seen in the network
     int lowestVal;  //lowest value seen in the network
-    int countAbove; //count of nodes above (gathered from a recursive ping)
-    int countBelow; //count of nodes below (gathered from a recursive ping)
 
-    boolean isOriginator; //true if originator of the gossip session
+    boolean isGossipOriginator; //true if originator of the gossip session
 
     String consoleInputString;
 }
@@ -31,6 +29,10 @@ class NodeInfo{
     int currentAverage; //average of the network
     int currentSize = 0; //calculate size of network with inverse of average
     int numOfCycles_total = 0; //default of 20 cycles, can be changed from CmdLine
+
+    int nodeSemaphore = 0; //true means it is locked
+    boolean livingNodeAbove = false;
+    boolean livingNodeBelow = false;
 }
 
 class GossipWorker extends Thread{
@@ -47,10 +49,20 @@ class GossipWorker extends Thread{
 
 
 public class Gossip {
-    public static int serverPort = 45565; //THIS NEEDS TO CHANGE
+    public static int serverPort = 48100; //THIS NEEDS TO CHANGE
     public static int NodeNumber = 0; //THIS COMES FROM FIRST ARGUMENT PASSED
 
     public static void main(String[] args) throws Exception{
+        if(args.length == 1){
+            System.out.println(args[0]);
+            try{
+                NodeNumber = Integer.parseInt(args[0]);
+            }catch (NumberFormatException NFE){
+                System.out.println("The only argument Gossip accepts is an integer number");
+            }
+            
+        }
+        serverPort += NodeNumber;
         System.out.println("Nicholas Ragano's Gossip Server 1.0 starting up, listening at port " + Gossip.serverPort + ".\n");
 
         //Start a thread for the ConsoleMonitor to listen for console commands
