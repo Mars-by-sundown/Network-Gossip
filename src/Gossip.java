@@ -7,6 +7,9 @@
 
 import java.io.*;
 import java.net.*;
+import java.util.Random;
+
+import org.w3c.dom.Node;
 
 
 class GossipData implements Serializable {
@@ -28,42 +31,181 @@ class NodeInfo{
     int maxNetworkVal;
     int currentAverage; //average of the network
     int currentSize = 0; //calculate size of network with inverse of average
-    int numOfCycles_total = 0; //default of 20 cycles, can be changed from CmdLine
+    int numOfCycles_total = 0; //lifetime count of cycles
+    int cycleLimit = 20; //set to 20 be default
 
     int nodeSemaphore = 0; //true means it is locked
     boolean livingNodeAbove = false;
     boolean livingNodeBelow = false;
+
+    NodeInfo(int id, int serverPort){
+        this.nodeID = id;
+        this.serverPort = serverPort;
+        generateNewValue(); //populate our dataValue with a random value on construction
+
+        //at this moment in time we are unaware of any node except ourself so these are all "true"
+        minNetworkVal = dataValue;
+        maxNetworkVal = dataValue;
+        currentAverage = dataValue;
+    }
+
+    public void generateNewValue(){
+        Random rng = new Random();
+        dataValue = rng.nextInt(100);
+    }
 }
 
 class GossipWorker extends Thread{
     GossipData gossipObject;
+    NodeInfo localNode;
 
-    GossipWorker(GossipData c) {
+    GossipWorker(GossipData c, NodeInfo n) {
         gossipObject = c; //save reference to the object handed in
+        localNode = n;
     }
 
     public void run(){
-        System.out.println("\n Gossip Worker");
+        System.out.println("\nGossip Worker " + gossipObject.consoleInputString);
+        if(gossipObject.consoleInputString.matches("\\d+")){
+            //if its an integer number
+            setCycleLimit(Integer.parseInt(gossipObject.consoleInputString));
+        }
+        //else its something
+        switch(gossipObject.consoleInputString){
+            case "t": displayAllCommands(); break;
+            case "l": displayLocals(); break;
+            case "p": ping(); break;
+            case "m": getNetwork_MinMax(); break;
+            case "a": getNetwork_Average(); break;
+            case "z": getNetwork_Size(); break;
+            case "v": seedNewValues(); break;
+            case "d": killSelf(false); break;
+            case "k": killAll(); break;
+            case "y": getCycleCount(); break;
+            default: System.out.println("Unrecognized argument passed to GossipWorker");
+        }
     }
+
+    //t
+    private void displayAllCommands(){
+        System.out.println("Showing all commands.\n");
+    }
+
+    // l
+    private void displayLocals(){
+        System.out.println("-l display locals on all nodes. Node Value: <current node value>.\n");
+        
+    }
+
+    // p
+    private void ping(){
+        if(isNodeAbove()){
+            System.out.println("There is a node above, Node ID: " + (localNode.nodeID + 1) + ".\n");
+        }else{
+            System.out.println("No node found above.\n");
+        }
+        if(isNodeBelow()){
+            System.out.println("There is a node below, Node ID: " + (localNode.nodeID - 1) + ".\n");
+        }else{
+            System.out.println("No node found below.\n");
+        }
+    }
+
+    private boolean isNodeAbove(){
+        return false;
+    }
+
+    private boolean isNodeBelow(){
+        return false;
+    }
+
+    private boolean checkForNeighbor(int direction){
+        return false;
+    }
+
+    //m
+    private void getNetwork_MinMax(){
+        System.out.println("The max of the network is: " + localNode.maxNetworkVal +".\n");
+        System.out.println("The min of the network is: " + localNode.minNetworkVal +".\n");
+    }
+
+    //a
+    private void getNetwork_Average(){
+        System.out.println("The average value of the network is: " + localNode.currentAverage + ".\n");
+    }
+
+    //z
+    private void getNetwork_Size(){
+        System.out.println("The size of the network is: " + localNode.currentSize + ".\n");
+    }
+
+    //v
+    private void seedNewValues(){
+        System.out.println("Regenerating Node values.\n");
+        //need to propogate to the rest of the network
+    }
+
+    //d
+    private void killSelf(boolean propagate){
+        //will need to send to next node in the chain and wait for a kill success in order to kill self
+        System.out.println("Closing this node...\n");
+        System.out.println("Killing listeners...\n");
+    }
+
+    //k
+    private void killAll(){
+        //send kill commands to the whole network
+    }
+
+    //y
+    private void getCycleCount(){
+        //return lifetime cycle count
+        System.out.println("Lifetime Cycles: " + localNode.numOfCycles_total + ".\n");
+    }
+
+    //N (an integer # is input)
+    private void setCycleLimit(int newLimit){
+        System.out.println("Setting cycle limit of network to: " + newLimit + ".\n");
+    }
+
+    //Q
+    private void getSizeOfSubnet(boolean isOriginator){
+        //non-required
+        if(isOriginator){
+            //marks this node as the orginator
+            //sends a count up and a count down
+            //receives a number in return with count of nodes above and below in the subnet
+        }else{
+            //this would be activated if it was a message received from another Node
+            //in this case it will check if there is a node in the opposite direction the request was received from
+            //it will pass the message along and wait for a reply
+            //it will then combine the count received and pass back to the requester
+        }
+    }
+
+
+    
 }
 
 
 public class Gossip {
     public static int serverPort = 48100; //THIS NEEDS TO CHANGE
     public static int NodeNumber = 0; //THIS COMES FROM FIRST ARGUMENT PASSED
+    public static NodeInfo nodeLocalInfo;
 
     public static void main(String[] args) throws Exception{
         if(args.length == 1){
             System.out.println(args[0]);
             try{
                 NodeNumber = Integer.parseInt(args[0]);
+                nodeLocalInfo = new NodeInfo(NodeNumber, serverPort);
             }catch (NumberFormatException NFE){
                 System.out.println("The only argument Gossip accepts is an integer number");
             }
             
         }
         serverPort += NodeNumber;
-        System.out.println("Nicholas Ragano's Gossip Server 1.0 starting up, listening at port " + Gossip.serverPort + ".\n");
+        System.out.println("Nicholas Ragano's Gossip Server 1.0 starting up, listening at port " + Gossip.serverPort + ".");
 
         //Start a thread for the ConsoleMonitor to listen for console commands
         ConsoleMonitor CM = new ConsoleMonitor();
@@ -74,7 +216,7 @@ public class Gossip {
         try{
             //create our datagram listener socket
             DatagramSocket DGListenerSocket = new DatagramSocket(Gossip.serverPort);
-            System.out.println("SERVER: Receive Buffer size: " + DGListenerSocket.getReceiveBufferSize() + "\n");
+            // System.out.println("SERVER: Receive Buffer size: " + DGListenerSocket.getReceiveBufferSize());
             //create a byte buffer to hold incoming packets
             byte[] incomingData = new byte[1024]; //can accept a message of 1024 bytes
             InetAddress IPAddress = InetAddress.getByName("localhost"); //not currently utilized
@@ -100,7 +242,7 @@ public class Gossip {
                     }
                     //take the message we received and fire up a worker to handle it
                     System.out.println("SERVER: Gossip command received: " + gossipObj.consoleInputString + "\n");
-                    new GossipWorker(gossipObj).start();
+                    new GossipWorker(gossipObj, nodeLocalInfo).start();
 
                 }catch(ClassNotFoundException CNF) {
                     CNF.printStackTrace();
@@ -121,6 +263,7 @@ public class Gossip {
 class ConsoleMonitor implements Runnable{
     public void run(){
         BufferedReader consoleIn = new BufferedReader(new InputStreamReader(System.in));
+        boolean keepAlive = true;
         try{
             String inString;
             do{
@@ -132,6 +275,7 @@ class ConsoleMonitor implements Runnable{
                     //user requested to quit
                     System.out.println("CM: Exiting by user request.\n");
                     //call to quit process
+                    keepAlive = false;
                 }
 
                 try{
@@ -154,6 +298,7 @@ class ConsoleMonitor implements Runnable{
                     byte[] data = byteoutStream.toByteArray();
                     DatagramPacket sendPacket = new DatagramPacket(data, data.length, IPAddress, Gossip.serverPort);
                     DGSocket.send(sendPacket);
+                    DGSocket.close();
 
                 }catch (UnknownHostException UHE){
                     System.out.println("\nCM: Unknown Host Exception.\n");
