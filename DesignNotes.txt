@@ -1,0 +1,37 @@
+Listener - Listens for incoming requests and adds them to the priority queue
+ConsoleMonitor - Listens for console input and sends it to the Listener
+Queue manager - chooses what action to do next and tracks the current conversation
+    two queues
+        -console queue (checked before starting a new conversation)
+        -request queue (queue incoming requests from other nodes)
+priority (highest first) - 
+    1.current conversation -> skips the queue
+    2.console input -> console queue
+    3.request queue -> processed in order received
+
+queue manager flow
+    currentTransID = 
+    hasCurrentConv = boolean
+while(true){
+
+    if(!hasCurrentCon){
+        if there is no active conversation
+        if(console queue is not empty){
+            GossipData = consoleQueue.next()
+        }else{
+            console queue is empty, so check the request queue
+            GossipData = requestQueue.next()
+        }
+    }else{
+        there is an active conversation so check the conversation queue
+        GossipData = conversationQueue.next()
+    }
+
+    //at this point we should now have a GossipData object to work on, or there is nothing to do
+    //identify type of message from the following types
+        -request (either a console input or a trade request from another node)
+        -reply(A reply from another node with information, only possible with current conversations)
+        -ACK(only received from other nodes, needed to close conversation and transaction)
+    at this point we call the appropriate function, they should all return a GossipData object if something needs to be sent
+    now we send the packet off, make any small adjustments needed, and restart
+}   

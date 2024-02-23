@@ -8,35 +8,76 @@
 import java.io.*;
 import java.net.*;
 import java.util.Random;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.BlockingQueue;
 
-import org.w3c.dom.Node;
-
+enum messageTypes {CONSOLE, REQUEST, REPLY, ACK, NONE};
+enum commands{
+    SHOWCOMMANDS,
+    SHOWLOCALS,
+    PING,
+    MINMAX,
+    AVG,
+    SIZE,
+    NEWVAL,
+    DELNODE,
+    KILLNET,
+    LIFETIME,
+    NEWLIMIT,
+    NONE
+}
 
 class GossipData implements Serializable {
-    int nodeID; //unique id of the sending node
+    int sentValue;
     int average; //current average of network
     int highestVal; //highest value seen in the network
+    int highestVal_ID;
     int lowestVal;  //lowest value seen in the network
+    int lowestVal_ID;
 
-    boolean isGossipOriginator; //true if originator of the gossip session
+    int nodeID; //unique id of the sending node
 
-    String consoleInputString;
+    int originatorID;   //populated by the originator before starting a gossip session
+
+    String transactionID; //a unique ID created by the originator before starting a gossip session
+        //perhaps the nodeID and the current lifetime cycle count at message origination
+    
+    messageTypes msgType = messageTypes.NONE; //tracks RRA or console
+    commands command = commands.NONE;  //holds what the command is
+
+    String messageString;
+
+    public String toString(){
+        return "Sender ID: " + nodeID + ", Msg: " + messageString;
+    }
 }
 
 class NodeInfo{
     int nodeID;
+    InetAddress nodeIP;
     int serverPort;
     int dataValue; //random data value 
     int minNetworkVal;
+    int minNetworkVal_ID;
     int maxNetworkVal;
+    int maxNetworkVal_ID;
     int currentAverage; //average of the network
     int currentSize = 0; //calculate size of network with inverse of average
     int numOfCycles_total = 0; //lifetime count of cycles
+    int currentCycles = 0;
     int cycleLimit = 20; //set to 20 be default
+    
+    //conversation tracking
+    boolean hasCurrentConv = false;
+    String currentTransactionID = "";
+    int conversationPartnerID = -1;
+    BlockingQueue<GossipData> consoleQueue; //holds requests from the console
+    BlockingQueue<GossipData> requestQueue; //holds requests from other nodes
+    BlockingQueue<GossipData> conversationQueue; //holds replies to current conversation
+    //decision to use a queue for the current conversation is to allow ability to
+    // potentially receive multiple replies, as we may in the future wish to be able to have
+    // more than one conversation at a time (hence transID)
 
-    int nodeSemaphore = 0; //true means it is locked
-    boolean livingNodeAbove = false;
-    boolean livingNodeBelow = false;
 
     NodeInfo(int id, int serverPort){
         this.nodeID = id;
@@ -47,183 +88,140 @@ class NodeInfo{
         minNetworkVal = dataValue;
         maxNetworkVal = dataValue;
         currentAverage = dataValue;
+
+        consoleQueue = new ArrayBlockingQueue<GossipData>(5);
+        requestQueue = new ArrayBlockingQueue<GossipData>(10);
+        conversationQueue = new ArrayBlockingQueue<GossipData>(5);
     }
 
     public void generateNewValue(){
+        //generates a new value between 0-99
         Random rng = new Random();
         dataValue = rng.nextInt(100);
     }
+
+    public String toString(){
+        return 
+        "####################################################################################################\n" +
+        "   NodeID: " + nodeID + " port: " + serverPort + "\n" +
+        "   node Values (local value, avg, min, max): (" + dataValue + ", " + currentAverage + ", " + minNetworkVal + ", " + maxNetworkVal + ")\n" +
+        "   current size: " + currentSize +
+        "   cycle Info (limit, lifetime): (" + cycleLimit + ", " + numOfCycles_total + ")\n" +
+        "####################################################################################################\n";
+
+    }
 }
 
-class GossipWorker extends Thread{
-    GossipData gossipObject;
-    NodeInfo localNode;
 
-    GossipWorker(GossipData c, NodeInfo n) {
-        gossipObject = c; //save reference to the object handed in
-        localNode = n;
+class GossipDirector extends Thread{
+    NodeInfo locals;
+    boolean keepAlive = true;
+    GossipData incomingData; //will be pulled from a queue
+    GossipData outgoingData = new GossipData(); //will be sent off
+    GossipDirector(NodeInfo n){
+        locals = n;
     }
 
     public void run(){
-        System.out.println("\nGossip Worker " + gossipObject.consoleInputString);
-        if(gossipObject.consoleInputString.matches("\\d+")){
-            //if its an integer number
-            setCycleLimit(Integer.parseInt(gossipObject.consoleInputString));
-        }
-        //else its something
-        switch(gossipObject.consoleInputString){
-            case "t": displayAllCommands(); break;
-            case "l": displayLocals(); break;
-            case "p": ping(); break;
-            case "m": getNetwork_MinMax(); break;
-            case "a": getNetwork_Average(); break;
-            case "z": getNetwork_Size(); break;
-            case "v": seedNewValues(); break;
-            case "d": killSelf(false); break;
-            case "k": killAll(); break;
-            case "y": getCycleCount(); break;
-            default: System.out.println("Unrecognized argument passed to GossipWorker");
+        while(keepAlive){
+            incomingData = null;
+            if(!(locals.hasCurrentConv)){
+                //no active conversation, free to get a new one
+                if(!locals.consoleQueue.isEmpty()){
+                    //if there is a console request service it
+                    incomingData = locals.consoleQueue.poll();
+                    switch(incomingData.command){
+                        case SHOWCOMMANDS: displayAllCommands(); break;
+                        case SHOWLOCALS: displayLocals(); break;
+                    }
+
+                }else if(!locals.requestQueue.isEmpty()){
+                    //if there is a node request service it
+                    incomingData = locals.requestQueue.poll();
+                }else{
+                    //nothing left to do, skip to next iteration of loop somehow
+                    
+                }
+            }else{
+                //handle the current transaction
+                incomingData = locals.conversationQueue.poll();
+            }
+            if(incomingData != null){
+                //there was something
+                System.out.println("GDir: GossipData = " + incomingData);
+            }
         }
     }
 
     //t
     private void displayAllCommands(){
-        System.out.println("Showing all commands.\n");
+        System.out.println("Showing all commands.");
+        System.out.println("    t - show all commands");
+        System.out.println("    l - display local values on all nodes (l as in Lima)");
+        System.out.println("    p - ping neighbors of this node");
+        System.out.println("    m - calculate network min/max, display on all nodes");
+        System.out.println("    a - calculate network average, show on all nodes");
+        System.out.println("    z - calculate network size, show on all nodes");
+        System.out.println("    v - force new random values on network, all nodes");
+        System.out.println("    d - delete the current node");
+        System.out.println("    k - kill the network");
+        System.out.println("    N - N is an integer value, sets the cycle limit of the network (default 20)");
     }
 
     // l
     private void displayLocals(){
-        System.out.println("-l display locals on all nodes. Node Value: <current node value>.\n");
-        
+        System.out.println(locals);
     }
 
-    // p
-    private void ping(){
-        if(isNodeAbove()){
-            System.out.println("There is a node above, Node ID: " + (localNode.nodeID + 1) + ".\n");
-        }else{
-            System.out.println("No node found above.\n");
-        }
-        if(isNodeBelow()){
-            System.out.println("There is a node below, Node ID: " + (localNode.nodeID - 1) + ".\n");
-        }else{
-            System.out.println("No node found below.\n");
-        }
+    private GossipData setCycleLimit(GossipData gd, int x){
+        locals.cycleLimit = x; //set this nodes value to the new limit
+
+        //prepare to send the message onwards
+        gd.command = commands.NEWLIMIT; //set type of command
+        gd.msgType = messageTypes.REQUEST; //this is a new request sent from the console
+        gd.sentValue = x;
+        return gd;
     }
-
-    private boolean isNodeAbove(){
-        return false;
-    }
-
-    private boolean isNodeBelow(){
-        return false;
-    }
-
-    private boolean checkForNeighbor(int direction){
-        return false;
-    }
-
-    //m
-    private void getNetwork_MinMax(){
-        System.out.println("The max of the network is: " + localNode.maxNetworkVal +".\n");
-        System.out.println("The min of the network is: " + localNode.minNetworkVal +".\n");
-    }
-
-    //a
-    private void getNetwork_Average(){
-        System.out.println("The average value of the network is: " + localNode.currentAverage + ".\n");
-    }
-
-    //z
-    private void getNetwork_Size(){
-        System.out.println("The size of the network is: " + localNode.currentSize + ".\n");
-    }
-
-    //v
-    private void seedNewValues(){
-        System.out.println("Regenerating Node values.\n");
-        //need to propogate to the rest of the network
-    }
-
-    //d
-    private void killSelf(boolean propagate){
-        //will need to send to next node in the chain and wait for a kill success in order to kill self
-        System.out.println("Closing this node...\n");
-        System.out.println("Killing listeners...\n");
-    }
-
-    //k
-    private void killAll(){
-        //send kill commands to the whole network
-    }
-
-    //y
-    private void getCycleCount(){
-        //return lifetime cycle count
-        System.out.println("Lifetime Cycles: " + localNode.numOfCycles_total + ".\n");
-    }
-
-    //N (an integer # is input)
-    private void setCycleLimit(int newLimit){
-        System.out.println("Setting cycle limit of network to: " + newLimit + ".\n");
-    }
-
-    //Q
-    private void getSizeOfSubnet(boolean isOriginator){
-        //non-required
-        if(isOriginator){
-            //marks this node as the orginator
-            //sends a count up and a count down
-            //receives a number in return with count of nodes above and below in the subnet
-        }else{
-            //this would be activated if it was a message received from another Node
-            //in this case it will check if there is a node in the opposite direction the request was received from
-            //it will pass the message along and wait for a reply
-            //it will then combine the count received and pass back to the requester
-        }
-    }
-
-
-    
 }
 
-
 public class Gossip {
-    public static int serverPort = 48100; //THIS NEEDS TO CHANGE
+    public static int serverPort = 48100;
     public static int NodeNumber = 0; //THIS COMES FROM FIRST ARGUMENT PASSED
     public static NodeInfo nodeLocalInfo;
 
     public static void main(String[] args) throws Exception{
-        if(args.length == 1){
-            System.out.println(args[0]);
+        if(args.length > 0){
             try{
                 NodeNumber = Integer.parseInt(args[0]);
-                nodeLocalInfo = new NodeInfo(NodeNumber, serverPort);
+
             }catch (NumberFormatException NFE){
                 System.out.println("The only argument Gossip accepts is an integer number");
             }
-            
         }
         serverPort += NodeNumber;
+        nodeLocalInfo = new NodeInfo(NodeNumber, serverPort);
         System.out.println("Nicholas Ragano's Gossip Server 1.0 starting up, listening at port " + Gossip.serverPort + ".");
+
+        //Start a thread for our Gossip Director
+        GossipDirector GDir = new GossipDirector(nodeLocalInfo);
+        Thread GdirThread = new Thread(GDir);
+        GdirThread.start(); 
 
         //Start a thread for the ConsoleMonitor to listen for console commands
         ConsoleMonitor CM = new ConsoleMonitor();
         Thread CMThread = new Thread(CM);
         CMThread.start();
 
-        boolean keepAlive = true; //keep the datagram listener running
         try{
             //create our datagram listener socket
             DatagramSocket DGListenerSocket = new DatagramSocket(Gossip.serverPort);
-            // System.out.println("SERVER: Receive Buffer size: " + DGListenerSocket.getReceiveBufferSize());
             //create a byte buffer to hold incoming packets
             byte[] incomingData = new byte[1024]; //can accept a message of 1024 bytes
-            InetAddress IPAddress = InetAddress.getByName("localhost"); //not currently utilized
+            // nodeLocalInfo.nodeIP =  InetAddress.getByName("localhost");
 
+            boolean keepAlive = true; //keep the datagram listener running
             //loop to listen for incoming packets from consolemonitor or from other gossip servers
             while(keepAlive){
-
                 //listen a receive packets
                 DatagramPacket incomingPacket = new DatagramPacket(incomingData, incomingData.length);
                 DGListenerSocket.receive(incomingPacket);
@@ -234,16 +232,28 @@ public class Gossip {
                 ObjectInputStream objInStream = new ObjectInputStream(inStream);
                 try{
                     GossipData gossipObj = (GossipData) objInStream.readObject();
+                    switch(gossipObj.msgType){
+                        case CONSOLE: nodeLocalInfo.consoleQueue.add(gossipObj); break;
+                        case REQUEST: 
+                            if(nodeLocalInfo.hasCurrentConv && gossipObj.nodeID == nodeLocalInfo.conversationPartnerID){
+                                //if we are in a current conversation check if this is a request from the same node
+                                //  we are communicating with (if each node sends a req at the same time, we would deadlock if not for this)
+                                //then we have a request from the same node we sent a request to
+                                //this means we will be deadlocked
+                                //HANDLE THIS SOMEHOW, EITHER DROP CONV, DROP REQUEST, RANDOMLY DROP ONE, ETC.
 
-                    //check what the console input was, if it was a stop server command then die
-                    if(gossipObj.consoleInputString.indexOf("stopserver") > -1){
-                        System.out.println("SERVER: Stopping UDP listener now.\n");
-                        keepAlive = false;
+                                //then this is just a normal request from some other node and we can store it in the queue
+                            }else{
+                                nodeLocalInfo.requestQueue.add(gossipObj);
+                            }break;
+                        case REPLY: nodeLocalInfo.conversationQueue.add(gossipObj); break;
+                        case ACK: 
+                            //finalize values, reset flags, service next request, manager should handle this
+                            nodeLocalInfo.consoleQueue.add(gossipObj);
+                            break;
+                        case NONE: break;
+                        default: break;
                     }
-                    //take the message we received and fire up a worker to handle it
-                    System.out.println("SERVER: Gossip command received: " + gossipObj.consoleInputString + "\n");
-                    new GossipWorker(gossipObj, nodeLocalInfo).start();
-
                 }catch(ClassNotFoundException CNF) {
                     CNF.printStackTrace();
                 }
@@ -271,20 +281,38 @@ class ConsoleMonitor implements Runnable{
                 System.out.flush();
                 inString = consoleIn.readLine();
 
+                GossipData gossipObj = new GossipData();
+                gossipObj.messageString = inString;
+                gossipObj.msgType = messageTypes.CONSOLE;
+
                 if(inString.indexOf("quit") > -1){
                     //user requested to quit
                     System.out.println("CM: Exiting by user request.\n");
                     //call to quit process
                     keepAlive = false;
-                }
+                }else{
+                    //else its something
+                    switch(inString){
+                        case "t": gossipObj.command = commands.SHOWCOMMANDS; break;
+                        case "l": gossipObj.command = commands.SHOWLOCALS; break;
+                        case "p": gossipObj.command = commands.PING; break;
+                        case "m": gossipObj.command = commands.MINMAX; break;
+                        case "a": gossipObj.command = commands.AVG; break;
+                        case "z": gossipObj.command = commands.SIZE; break;
+                        case "v": gossipObj.command = commands.NEWVAL; break;
+                        case "d": gossipObj.command = commands.DELNODE; break;
+                        case "k": gossipObj.command = commands.KILLNET; break;
+                        case "y": gossipObj.command = commands.LIFETIME; break;
+                        default: 
+                            gossipObj.command = commands.NONE;
+                            System.out.println("Unrecognized argument passed to GossipWorker");
+                    }
+                }   
 
                 try{
                     System.out.println("CM: Preparing the datagram packet now...");
                     DatagramSocket DGSocket = new DatagramSocket();
                     InetAddress IPAddress = InetAddress.getByName("localhost");
-
-                    GossipData gossipObj = new GossipData();
-                    gossipObj.consoleInputString = inString;
 
                     //open a byte array output stream
                     ByteArrayOutputStream byteoutStream = new ByteArrayOutputStream();
