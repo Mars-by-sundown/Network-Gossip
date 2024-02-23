@@ -66,6 +66,8 @@ class NodeInfo{
     int numOfCycles_total = 0; //lifetime count of cycles
     int currentCycles = 0;
     int cycleLimit = 20; //set to 20 be default
+    boolean hasNodeAbove = false;
+    boolean hasNodeBelow = false;
     
     //conversation tracking
     boolean hasCurrentConv = false;
@@ -113,11 +115,13 @@ class NodeInfo{
 }
 
 
+
+
 class GossipDirector extends Thread{
     NodeInfo locals;
     boolean keepAlive = true;
     GossipData incomingData; //will be pulled from a queue
-    GossipData outgoingData = new GossipData(); //will be sent off
+
     GossipDirector(NodeInfo n){
         locals = n;
     }
@@ -130,25 +134,32 @@ class GossipDirector extends Thread{
                 if(!locals.consoleQueue.isEmpty()){
                     //if there is a console request service it
                     incomingData = locals.consoleQueue.poll();
+                    incomingData.msgType = messageTypes.REQUEST;
                     switch(incomingData.command){
                         case SHOWCOMMANDS: displayAllCommands(); break;
-                        case SHOWLOCALS: displayLocals(); break;
+                        case SHOWLOCALS: displayLocals(incomingData); break;
+                        case PING: ping(incomingData, incomingData.msgType, 1); ping(incomingData, incomingData.msgType, -1); break;
                     }
 
                 }else if(!locals.requestQueue.isEmpty()){
                     //if there is a node request service it
                     incomingData = locals.requestQueue.poll();
+                    switch(incomingData.command){
+                        case PING: ping(incomingData, incomingData.msgType, 0); break;
+                    }
                 }else{
                     //nothing left to do, skip to next iteration of loop somehow
                     
                 }
             }else{
-                //handle the current transaction
-                incomingData = locals.conversationQueue.poll();
-            }
-            if(incomingData != null){
-                //there was something
-                System.out.println("GDir: GossipData = " + incomingData);
+                if(!locals.conversationQueue.isEmpty()){
+                    //handle the current transaction
+                    incomingData = locals.conversationQueue.poll();
+                    switch(incomingData.command){
+                        case PING: ping(incomingData, incomingData.msgType,0); break;
+                    }
+                }
+
             }
         }
     }
@@ -169,9 +180,47 @@ class GossipDirector extends Thread{
     }
 
     // l
-    private void displayLocals(){
+    private void displayLocals(GossipData gossipObj){
         System.out.println(locals);
+        gossipObj.msgType = messageTypes.REQUEST;
+        sendMsg(gossipObj, locals.serverPort + 1);
+        sendMsg(gossipObj, locals.serverPort - 1);
     }
+
+    // p
+    private void ping(GossipData gossipObj, messageTypes pingType, int offset){
+        switch(pingType){
+            case REQUEST: 
+                //we are sending a ping
+                if(gossipObj.originatorID == locals.nodeID){
+                    //we are orginating the request and starting the transaction
+                    System.out.println("SENDING PING REQUEST");
+                    locals.hasCurrentConv = true;
+
+                }else{
+                    //we are receiving this request from another node and just need to reply back
+                    gossipObj.msgType = messageTypes.REPLY;
+                    offset = gossipObj.originatorID - locals.nodeID;
+                }
+                sendMsg(gossipObj, (locals.serverPort + offset));
+                System.out.println(locals.nodeID + " sending " + gossipObj.msgType + " to " + (locals.serverPort + offset));
+
+                break;
+            case REPLY:
+                //we are receiving a response to our ping, mark that node as alive
+                locals.hasCurrentConv = false; //conversation over
+                if(gossipObj.nodeID > locals.nodeID){
+                    locals.hasNodeAbove = true;
+                }else{
+                    locals.hasNodeBelow = true;
+                }
+                System.out.println("ping results - Node Above: " + locals.hasNodeAbove + ", Node Below: " + locals.hasNodeBelow + "\n");
+                break;
+        }
+    }
+
+
+
 
     private GossipData setCycleLimit(GossipData gd, int x){
         locals.cycleLimit = x; //set this nodes value to the new limit
@@ -181,6 +230,42 @@ class GossipDirector extends Thread{
         gd.msgType = messageTypes.REQUEST; //this is a new request sent from the console
         gd.sentValue = x;
         return gd;
+    }
+
+    private String newTransID(){
+        StringBuilder newStr = new StringBuilder();
+        newStr.append(locals.numOfCycles_total);
+        newStr.append(locals.nodeID);
+        return newStr.toString();
+    }
+
+    private void sendMsg(GossipData outgoingGossip, int targetPort){
+        //sends a gossipData message to the recipient node
+        try{
+            DatagramSocket DGSocket = new DatagramSocket();
+            InetAddress IPAddress = InetAddress.getByName("localhost");
+
+            //open a byte array output stream
+            ByteArrayOutputStream byteoutStream = new ByteArrayOutputStream();
+
+            //use the byte out stream to send the serialized gossipObj
+            ObjectOutputStream outStream = new ObjectOutputStream(byteoutStream);
+
+            outgoingGossip.nodeID = locals.nodeID;
+            outStream.writeObject(outgoingGossip);
+
+            //the serialized data object is converted and stored in a byte array
+            //it is then placed into a datagram packet, and sent to the IPAddress and port
+            byte[] data = byteoutStream.toByteArray();
+            DatagramPacket sendPacket = new DatagramPacket(data, data.length, IPAddress, targetPort);
+            DGSocket.send(sendPacket);
+            DGSocket.close();
+        }catch(UnknownHostException UNH){
+            UNH.printStackTrace();
+        }catch(IOException IOE){
+            IOE.printStackTrace();
+        }
+
     }
 }
 
@@ -233,23 +318,12 @@ public class Gossip {
                 try{
                     GossipData gossipObj = (GossipData) objInStream.readObject();
                     switch(gossipObj.msgType){
-                        case CONSOLE: nodeLocalInfo.consoleQueue.add(gossipObj); break;
-                        case REQUEST: 
-                            if(nodeLocalInfo.hasCurrentConv && gossipObj.nodeID == nodeLocalInfo.conversationPartnerID){
-                                //if we are in a current conversation check if this is a request from the same node
-                                //  we are communicating with (if each node sends a req at the same time, we would deadlock if not for this)
-                                //then we have a request from the same node we sent a request to
-                                //this means we will be deadlocked
-                                //HANDLE THIS SOMEHOW, EITHER DROP CONV, DROP REQUEST, RANDOMLY DROP ONE, ETC.
-
-                                //then this is just a normal request from some other node and we can store it in the queue
-                            }else{
-                                nodeLocalInfo.requestQueue.add(gossipObj);
-                            }break;
+                        case CONSOLE: gossipObj.originatorID = nodeLocalInfo.nodeID; nodeLocalInfo.consoleQueue.add(gossipObj); break;
+                        case REQUEST: nodeLocalInfo.requestQueue.add(gossipObj); break;
                         case REPLY: nodeLocalInfo.conversationQueue.add(gossipObj); break;
                         case ACK: 
                             //finalize values, reset flags, service next request, manager should handle this
-                            nodeLocalInfo.consoleQueue.add(gossipObj);
+                            nodeLocalInfo.conversationQueue.add(gossipObj);
                             break;
                         case NONE: break;
                         default: break;

@@ -12,6 +12,24 @@
             "console": "integratedTerminal",
             "args": "",
             "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "java",
+            "name": "Gossip1",
+            "request": "launch",
+            "mainClass": "Gossip",
+            "console": "integratedTerminal",
+            "args": "1",
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "java",
+            "name": "Gossip2",
+            "request": "launch",
+            "mainClass": "Gossip",
+            "console": "integratedTerminal",
+            "args": "2",
+            "cwd": "${workspaceFolder}"
         }
     ],
     "compounds": [
@@ -22,7 +40,7 @@
         },
         {
             "name": "Multi Node",
-            "configurations": ["Gossip","Gossip","Gossip"],
+            "configurations": ["Gossip","Gossip1","Gossip2"],
             "stopAll": false
         }
 
