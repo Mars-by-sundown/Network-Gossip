@@ -7,19 +7,15 @@
 
 import java.io.*;
 import java.net.*;
+import java.util.Timer;
+import java.util.TimerTask;
 import java.util.Random;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 
 
 
-enum messageTypes {
-    CONSOLE, 
-    REQUEST, 
-    REPLY, 
-    ACK, 
-    NONE
-}
+enum messageTypes {CONSOLE, REQUEST, REPLY, ACK, NONE};
 enum commands{
     SHOWCOMMANDS,
     SHOWLOCALS,
@@ -43,11 +39,14 @@ class GossipData implements Serializable {
     int lowestVal;  //lowest value seen in the network
     int lowestVal_ID;
     int cycleNumber = 0;
-    int targetPort; 
 
     int nodeID; //unique id of the sending node
 
     int originatorID;   //populated by the originator before starting a gossip session
+
+    String transactionID; //a unique ID created by the originator before starting a gossip session
+        //perhaps the nodeID and the current lifetime cycle count at message origination
+    
     messageTypes msgType = messageTypes.NONE; //tracks RRA or console
     commands command = commands.NONE;  //holds what the command is
 
@@ -64,9 +63,9 @@ class GossipData implements Serializable {
         this.highestVal_ID = copyFrom.highestVal_ID;
         this.lowestVal = copyFrom.lowestVal;
         this.lowestVal_ID = copyFrom.lowestVal_ID;
-        this.targetPort = copyFrom.targetPort;
         this.nodeID = copyFrom.nodeID;
         this.originatorID = copyFrom.originatorID;
+        this.transactionID = copyFrom.transactionID;
         this.msgType = copyFrom.msgType;
         this.command = copyFrom.command;
         this.cycleNumber = copyFrom.cycleNumber;
@@ -96,18 +95,25 @@ class NodeInfo{
     boolean hasNodeBelow = false;
     
     //conversation tracking
-    boolean nodeIsFree = true;
-    int portLastSentTo;
-    long timeLastSent;
-    long timeoutTime = 3000;
+    boolean hasCurrentConv = false;
+    String currentTransactionID = "";
+    int numRepliesExpected = 0;
     BlockingQueue<GossipData> consoleQueue; //holds requests from the console
     BlockingQueue<GossipData> requestQueue; //holds requests from other nodes
     BlockingQueue<GossipData> conversationQueue; //holds replies to current conversation
     //decision to use a queue for the current conversation is to allow ability to
     // potentially receive multiple replies, as we may in the future wish to be able to have
     // more than one conversation at a time (hence transID)
-
-    
+    long TIMEOUT_TIME = 3000; //3 second timeout for no response
+    Timer replyTimeout = new Timer();
+    TimerTask conversationTimeout = new TimerTask() {
+        public void run(){
+            hasCurrentConv = false;
+            numRepliesExpected = 0;
+            conversationQueue.clear();
+            System.out.println("Timed our waiting for response, transaction dropped");
+        }
+    };
 
     NodeInfo(int id, int serverPort){
         this.nodeID = id;
@@ -122,23 +128,6 @@ class NodeInfo{
         consoleQueue = new ArrayBlockingQueue<GossipData>(5);
         requestQueue = new ArrayBlockingQueue<GossipData>(10);
         conversationQueue = new ArrayBlockingQueue<GossipData>(5);
-    }
-
-
-    public void startTransaction(){
-        nodeIsFree = false;
-        timeLastSent = System.currentTimeMillis();
-    }
-
-    public boolean waitTimeExceeded(){
-        //returns true if we have waited longer than the timeoutTime since receiving a reply
-        return ((System.currentTimeMillis() - timeLastSent) > timeoutTime);
-    }
-
-    public void resetTransaction(){
-        nodeIsFree = true;
-        // System.out.println("#>Transaction reset");
-
     }
 
     public void generateNewValue(){
@@ -173,75 +162,39 @@ class GossipDirector extends Thread{
 
     public void run(){
         while(keepAlive){
-            if(locals.nodeIsFree){
-                //we can first check for console commands
-                // and then for incoming requests
+            incomingData = null;
+            if(!(locals.hasCurrentConv)){
+                //no active conversation, free to get a new one
                 if(!locals.consoleQueue.isEmpty()){
-                    //there is a console request
+                    //if there is a console request service it
                     incomingData = locals.consoleQueue.remove();
                     switch(incomingData.command){
-                        case AVG: break;
-                        case DELNODE: break;
-                        case KILLNET: break;
-                        case LIFETIME: break;
-                        case MINMAX: break;
-                        case NEWLIMIT: break;
+                        case SHOWCOMMANDS: displayAllCommands(); break;
+                        case SHOWLOCALS: displayLocals(incomingData); break;
+                        case PING: 
+                            locals.hasNodeBelow = false; ping(incomingData, incomingData.msgType, 1);
+                            locals.hasNodeAbove = false; ping(incomingData, incomingData.msgType, -1);
+                            break;
                         case NEWVAL: break;
-                        case NONE: break;
-                        case PING: ping(incomingData); break;
-                        case SHOWCOMMANDS: break;
-                        case SHOWLOCALS: break;
-                        case SIZE: break;
-                        default: break;
                     }
 
                 }else if(!locals.requestQueue.isEmpty()){
-                    //console queue is empty, service incoming requests
+                    //if there is a node request service it
                     incomingData = locals.requestQueue.remove();
                     switch(incomingData.command){
-                        case AVG: break;
-                        case DELNODE: break;
-                        case KILLNET: break;
-                        case LIFETIME: break;
-                        case MINMAX: break;
-                        case NEWLIMIT: break;
-                        case NEWVAL: break;
-                        case NONE: break;
-                        case PING: ping(incomingData); break;
-                        case SHOWCOMMANDS: break;
-                        case SHOWLOCALS: break;
-                        case SIZE: break;
-                        default: break;
+                        case SHOWLOCALS: displayLocals(incomingData); break;
+                        case PING: ping(incomingData, incomingData.msgType, 0); break;
+                    }
+                }
+            }else{
+                if(!locals.conversationQueue.isEmpty()){
+                    //handle the current transaction
+                    incomingData = locals.conversationQueue.remove();
+                    switch(incomingData.command){
+                        case PING: ping(incomingData, incomingData.msgType,0); break;
                     }
                 }
 
-            }else{
-                //we are in a conversation
-                if(!locals.conversationQueue.isEmpty()){
-                    incomingData = locals.conversationQueue.remove();
-                    switch(incomingData.command){
-                        case AVG: break;
-                        case DELNODE: break;
-                        case KILLNET: break;
-                        case LIFETIME: break;
-                        case MINMAX: break;
-                        case NEWLIMIT: break;
-                        case NEWVAL: break;
-                        case NONE: break;
-                        case PING: ping(incomingData); break;
-                        case SHOWCOMMANDS: break;
-                        case SHOWLOCALS: break;
-                        case SIZE: break;
-                        default: break;
-                    }
-                }else if(locals.waitTimeExceeded()){
-                    //the wait time has been exceeded. 
-                    //  dump the transaction and go service console and request queues
-                    System.out.println("!!!!!WAIT TIME EXCEEDED, DROPPING TRANSACTION!!!!!!!");
-                    System.out.println("    Failed to receive reply from port: " + locals.portLastSentTo);
-                    locals.resetTransaction();
-                    
-                }
             }
         }
     }
@@ -262,52 +215,104 @@ class GossipDirector extends Thread{
     }
 
     // l
-    private void displayLocals(GossipData message){
-        GossipData gossipObj = new GossipData(message);
+    private void displayLocals(GossipData gossipObj){
         System.out.println(locals);
+        
+        if(gossipObj.originatorID == locals.nodeID && gossipObj.msgType == messageTypes.CONSOLE){
+            //send in both directions
+            gossipObj.msgType = messageTypes.REQUEST;
+            sendMsg(gossipObj, locals.serverPort + 1);
+            sendMsg(gossipObj, locals.serverPort - 1);
+        }else{
+            gossipObj.msgType = messageTypes.REQUEST;
+            //send in opposite direction of the one we received it from
+            if(gossipObj.nodeID < locals.nodeID){
+                sendMsg(gossipObj, locals.serverPort + 1);
+            }
+            if(gossipObj.nodeID > locals.nodeID){
+                sendMsg(gossipObj, locals.serverPort - 1);
+            }
+        }
     }
 
     // p
-    private void ping(GossipData inMessage){
-        GossipData outMessage = new GossipData(inMessage);
-        switch(inMessage.msgType){
+    private void ping(GossipData message, messageTypes pingType, int offset){
+        GossipData gossipObj = new GossipData(message);
+        switch(gossipObj.msgType){
             case CONSOLE:
-                outMessage.msgType = messageTypes.REQUEST;
-                sendMsg(outMessage, outMessage.targetPort); //send to node above
-                locals.startTransaction();
+                //we are initiating this request
+                gossipObj.msgType = messageTypes.REQUEST;
+                locals.hasCurrentConv = true;
+                locals.numRepliesExpected += 1;
+                System.out.println("    Node " + locals.nodeID + " sending " + gossipObj.msgType + " to " + (locals.serverPort + offset) + ": " + gossipObj);
+                sendMsg(gossipObj, (locals.serverPort + offset));
+                break;
+            case REQUEST:               
+                //we are receiving this request from another node and just need to reply back
+                gossipObj.msgType = messageTypes.REPLY;
+                offset = gossipObj.originatorID - locals.nodeID;
+                System.out.println("    Node " + locals.nodeID + " sending " + gossipObj.msgType + " to " + (locals.serverPort + offset) + ": " + gossipObj);
+                sendMsg(gossipObj, (locals.serverPort + offset));
                 break;
             case REPLY:
-                System.out.print("#> Ping reply received from node: " + inMessage.nodeID);
-                if(inMessage.nodeID > locals.nodeID){
-                    System.out.println(", Node above is alive");
-                }else{
-                    System.out.println(", Node below is alive");
+                //we are receiving a response to our ping, mark that node as alive
+                locals.numRepliesExpected -= 1;
+                if(locals.numRepliesExpected == 0){
+                    locals.hasCurrentConv = false; //conversation over
                 }
-                locals.resetTransaction();
-                break;
-            case REQUEST:
-                outMessage.msgType = messageTypes.REPLY; //reply to requester
-                //sets the targetPort to that of the node we received the message from
-                outMessage.targetPort += inMessage.originatorID - locals.nodeID;
-                sendMsg(outMessage, outMessage.targetPort); //send to node above
+                System.out.println(locals.conversationQueue);
+                if(gossipObj.nodeID > locals.nodeID){
+                    locals.hasNodeAbove = true;
+                    System.out.println("#> ping results - Node Above: " + locals.hasNodeAbove +"\n");
+                }
+                if(gossipObj.nodeID < locals.nodeID){
+                    locals.hasNodeBelow = true;
+                    System.out.println("#> ping results - Node Below: " + locals.hasNodeBelow +"\n");
+                }
                 break;
         }
     }
 
-    private void sendMsg(GossipData message, int targetPort){
+    //v
+    private void forceNewValues(GossipData gossipObj){
+
+    }
+
+
+    private GossipData setCycleLimit(GossipData gd, int x){
+        locals.cycleLimit = x; //set this nodes value to the new limit
+
+        //prepare to send the message onwards
+        gd.command = commands.NEWLIMIT; //set type of command
+        gd.msgType = messageTypes.REQUEST; //this is a new request sent from the console
+        gd.sentValue = x;
+        return gd;
+    }
+
+    private String newTransID(){
+        StringBuilder newStr = new StringBuilder();
+        newStr.append(locals.numOfCycles_total);
+        newStr.append(locals.nodeID);
+        return newStr.toString();
+    }
+
+    private void sendMsg(GossipData outgoingGossip, int targetPort){
         //sends a gossipData message to the recipient node
+
         try{
             if(targetPort >= 48100){
-                GossipData toSend = new GossipData(message);
-        
+                // GossipData toSend = new GossipData(outgoingGossip);
+                GossipData toSend = new GossipData(outgoingGossip);
+                
                 DatagramSocket DGSocket = new DatagramSocket();
                 InetAddress IPAddress = InetAddress.getByName("localhost");
                 ByteArrayOutputStream byteoutStream = new ByteArrayOutputStream();
+
+                //use the byte out stream to send the serialized gossipObj
                 ObjectOutputStream outStream = new ObjectOutputStream(byteoutStream);
 
                 toSend.nodeID = locals.nodeID;
                 outStream.writeObject(toSend);
-                
                 System.out.println("    Message sent -> Sender: " + locals.serverPort + ", to target: " + targetPort + " : " + toSend);
 
                 byte[] data = byteoutStream.toByteArray();
@@ -317,7 +322,7 @@ class GossipDirector extends Thread{
             }else{
                 System.out.println("#> GDir: target port out of bounds, skipping send, " + targetPort);
             }
-            locals.portLastSentTo = targetPort;
+
         }catch(UnknownHostException UNH){
             UNH.printStackTrace();
         }catch(IOException IOE){
@@ -325,12 +330,16 @@ class GossipDirector extends Thread{
         }catch(Exception e){
             e.printStackTrace();
         }
+
     }
 }
 
 
 public class Gossip {
     public static int serverPort = 48100;
+
+
+
     public static void main(String[] args) throws Exception{
         int NodeNumber = 0; //THIS COMES FROM FIRST ARGUMENT PASSED
         if(args.length > 0){
@@ -373,62 +382,49 @@ public class Gossip {
                 byte[] data = incomingPacket.getData();
                 ByteArrayInputStream inStream = new ByteArrayInputStream(data);
                 ObjectInputStream objInStream = new ObjectInputStream(inStream);
-                GossipData gossipObj = new GossipData((GossipData) objInStream.readObject());
-                    switch(gossipObj.msgType){
-                        // CONSOLE -> consoleQueue
-                        // REQUEST -> requestQueue
-                        // REPLY && ACK -> conversationQueue
-                        case CONSOLE: {
-                            gossipObj.originatorID = nodeLocalInfo.nodeID;
-                            if(gossipObj.command == commands.PING){
-                                sendBothWays(gossipObj, nodeLocalInfo.consoleQueue);
-                            } else{
-                                nodeLocalInfo.consoleQueue.add(gossipObj);
+                try{
+                    GossipData gossipObj = new GossipData((GossipData) objInStream.readObject());
+                    if(gossipObj.cycleNumber <= nodeLocalInfo.cycleLimit){
+                        switch(gossipObj.msgType){
+                            case CONSOLE: gossipObj.originatorID = nodeLocalInfo.nodeID; nodeLocalInfo.consoleQueue.add(gossipObj); break;
+                            case REQUEST: {
+                                System.out.println("    REQUEST RECEIVED FROM NODE: " + gossipObj.nodeID + " : " + gossipObj);
+                                nodeLocalInfo.requestQueue.add(gossipObj); 
+                                break;
                             }
-                            break;
+                                
+                            case REPLY:{
+                                
+                                System.out.println("    REPLY RECEIVED FROM NODE: " + gossipObj.nodeID + " : " + gossipObj + ", expecting " + nodeLocalInfo.numRepliesExpected + " more replies\n");
+                                
+                                nodeLocalInfo.conversationQueue.add(gossipObj); 
+                                
+                                break;
+                            } 
+                            case ACK: 
+                                //finalize values, reset flags, service next request, manager should handle this
+                                nodeLocalInfo.conversationQueue.add(gossipObj);
+                                break;
+                            case NONE: break;
+                            default: break;
                         }
-                        case REQUEST: {
-                            System.out.println("-REQUEST- RECEIVED FROM NODE: " + gossipObj.nodeID + " : " + gossipObj);
-                            nodeLocalInfo.requestQueue.add(gossipObj); 
-                            break;
-                        }
-                        case REPLY:{
-                            System.out.println("-REPLY- RECEIVED FROM NODE: " + gossipObj.nodeID + " : " + gossipObj);
-                            nodeLocalInfo.conversationQueue.add(gossipObj); 
-                            break;
-                        } 
-                        case ACK: 
-                            System.out.println("-ACK- RECEIVED FROM NODE: " + gossipObj.nodeID + " : " + gossipObj);
-                            //finalize values, reset flags, service next request, manager should handle this
-                            nodeLocalInfo.conversationQueue.add(gossipObj);
-                            break;
-                        case NONE: break;
-                        default: break;
+                    }else{
+                        //cycle limit reached, end gossip session, will need to send a completion message
                     }
+
+                }catch(ClassNotFoundException CNF) {
+                    CNF.printStackTrace();
+                }
             }
+
             //server clean up before end
             DGListenerSocket.close(); //close the socket before we shutdown
+
         } catch (SocketException SE){
             SE.printStackTrace();
         } catch (IOException IOE){
             IOE.printStackTrace();
-        } catch(ClassNotFoundException CNF) {
-            CNF.printStackTrace();
         }
-    }
-
-    public static void sendBothWays(GossipData message, BlockingQueue<GossipData> queueToPlaceIn){
-        //we need to handle this specially since it is really two requests
-        // one to the node above, and one to the node below
-        GossipData clonedMsg = new GossipData(message);
-        //turn this request into a node above request
-        message.targetPort = serverPort + 1;
-        // and the second into the node below
-        clonedMsg.targetPort = serverPort - 1;
-        queueToPlaceIn.add(message);
-        queueToPlaceIn.add(clonedMsg);
-        // System.out.println("    Sending both ways, Up: " + message + ", Down: " + clonedMsg);
-
     }
 }
 
@@ -439,7 +435,7 @@ class ConsoleMonitor implements Runnable{
         try{
             String inString;
             do{
-                System.out.println("CM: Enter a string to send to the gossipServer, or type quit/stopserver: ");
+                System.out.println("#> CM: Enter a string to send to the gossipServer, or type quit/stopserver: ");
                 System.out.flush();
                 inString = consoleIn.readLine();
 
