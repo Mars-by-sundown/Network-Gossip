@@ -100,6 +100,7 @@ class NodeInfo{
     int portLastSentTo;
     long timeLastSent;
     long timeoutTime = 3000;
+    boolean doubleToggle = false;
     BlockingQueue<GossipData> consoleQueue; //holds requests from the console
     BlockingQueue<GossipData> requestQueue; //holds requests from other nodes
     BlockingQueue<GossipData> conversationQueue; //holds replies to current conversation
@@ -112,7 +113,7 @@ class NodeInfo{
     NodeInfo(int id, int serverPort){
         this.nodeID = id;
         this.serverPort = serverPort;
-        generateNewValue(); //populate our dataValue with a random value on construction
+        generateNewValue(false); //populate our dataValue with a random value on construction
 
         //at this moment in time we are unaware of any node except ourself so these are all "true"
         minNetworkVal = dataValue;
@@ -141,10 +142,17 @@ class NodeInfo{
 
     }
 
-    public void generateNewValue(){
+    public void generateNewValue(boolean verbose){
         //generates a new value between 0-99
+        if(verbose){
+            System.out.println("  Generating new value");
+            System.out.println("  -> old value : " + dataValue);
+        }
+
         Random rng = new Random();
         dataValue = rng.nextInt(100);
+        if(verbose){System.out.println("  -> new value : " + dataValue);}
+        
     }
 
     public String toString(){
@@ -186,11 +194,11 @@ class GossipDirector extends Thread{
                         case LIFETIME: break;
                         case MINMAX: break;
                         case NEWLIMIT: break;
-                        case NEWVAL: break;
+                        case NEWVAL: regenerateNetwork(incomingData); break;
                         case NONE: break;
                         case PING: ping(incomingData); break;
                         case SHOWCOMMANDS: break;
-                        case SHOWLOCALS: break;
+                        case SHOWLOCALS: displayLocals(incomingData); break;
                         case SIZE: break;
                         default: break;
                     }
@@ -205,11 +213,11 @@ class GossipDirector extends Thread{
                         case LIFETIME: break;
                         case MINMAX: break;
                         case NEWLIMIT: break;
-                        case NEWVAL: break;
+                        case NEWVAL: regenerateNetwork(incomingData); break;
                         case NONE: break;
                         case PING: ping(incomingData); break;
                         case SHOWCOMMANDS: break;
-                        case SHOWLOCALS: break;
+                        case SHOWLOCALS: displayLocals(incomingData); break;
                         case SIZE: break;
                         default: break;
                     }
@@ -262,9 +270,23 @@ class GossipDirector extends Thread{
     }
 
     // l
-    private void displayLocals(GossipData message){
-        GossipData gossipObj = new GossipData(message);
-        System.out.println(locals);
+    private void displayLocals(GossipData inMessage){
+        GossipData outMessage = new GossipData(inMessage);
+
+        if(locals.doubleToggle == false) {
+            System.out.println(locals);
+        }
+        if(inMessage.msgType == messageTypes.CONSOLE){
+            //toggle this, will prevent a double print on the originating node
+            locals.doubleToggle = !locals.doubleToggle;
+        }else{
+            //will be received from another node so need to pass along
+            outMessage.originatorID = inMessage.nodeID; //set the orignator to the node we received from
+            outMessage.targetPort +=  locals.nodeID - outMessage.originatorID; //send in the same direction i.e. propagate
+        }
+        outMessage.msgType = messageTypes.REQUEST;
+ 
+        sendMsg(outMessage, outMessage.targetPort);
     }
 
     // p
@@ -272,8 +294,9 @@ class GossipDirector extends Thread{
         GossipData outMessage = new GossipData(inMessage);
         switch(inMessage.msgType){
             case CONSOLE:
+                //treat this as normal
                 outMessage.msgType = messageTypes.REQUEST;
-                sendMsg(outMessage, outMessage.targetPort); //send to node above
+                sendMsg(outMessage, outMessage.targetPort); 
                 locals.startTransaction();
                 break;
             case REPLY:
@@ -292,6 +315,14 @@ class GossipDirector extends Thread{
                 sendMsg(outMessage, outMessage.targetPort); //send to node above
                 break;
         }
+    }
+
+    //v
+    private void regenerateNetwork(GossipData inMessage){
+        GossipData outMessage = new GossipData(inMessage);
+        locals.generateNewValue(true);
+        outMessage.msgType = messageTypes.REQUEST;
+        sendMsg(outMessage, outMessage.targetPort);
     }
 
     private void sendMsg(GossipData message, int targetPort){
@@ -380,10 +411,10 @@ public class Gossip {
                         // REPLY && ACK -> conversationQueue
                         case CONSOLE: {
                             gossipObj.originatorID = nodeLocalInfo.nodeID;
-                            if(gossipObj.command == commands.PING){
-                                sendBothWays(gossipObj, nodeLocalInfo.consoleQueue);
-                            } else{
-                                nodeLocalInfo.consoleQueue.add(gossipObj);
+                            switch(gossipObj.command){
+                                case PING: sendBothWays(gossipObj, nodeLocalInfo.consoleQueue); break;
+                                case SHOWLOCALS: sendBothWays(gossipObj, nodeLocalInfo.consoleQueue); break;
+                                default: nodeLocalInfo.consoleQueue.add(gossipObj); break;
                             }
                             break;
                         }
@@ -428,8 +459,9 @@ public class Gossip {
         queueToPlaceIn.add(message);
         queueToPlaceIn.add(clonedMsg);
         // System.out.println("    Sending both ways, Up: " + message + ", Down: " + clonedMsg);
-
     }
+
+    
 }
 
 class ConsoleMonitor implements Runnable{
