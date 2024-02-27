@@ -10,6 +10,7 @@ import java.net.*;
 import java.util.Random;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
+import java.util.HashMap;
 
 
 
@@ -46,8 +47,10 @@ class GossipData implements Serializable {
     int targetPort; 
 
     int nodeID; //unique id of the sending node
+    int nodePort;
 
     int originatorID;   //populated by the originator before starting a gossip session
+    String transID;
     messageTypes msgType = messageTypes.NONE; //tracks RRA or console
     commands command = commands.NONE;  //holds what the command is
 
@@ -66,10 +69,13 @@ class GossipData implements Serializable {
         this.lowestVal_ID = copyFrom.lowestVal_ID;
         this.targetPort = copyFrom.targetPort;
         this.nodeID = copyFrom.nodeID;
+        this.nodePort = copyFrom.nodePort;
         this.originatorID = copyFrom.originatorID;
         this.msgType = copyFrom.msgType;
         this.command = copyFrom.command;
         this.cycleNumber = copyFrom.cycleNumber;
+        this.transID = copyFrom.transID;
+        
 
     }
 
@@ -89,7 +95,8 @@ class NodeInfo{
     int maxNetworkVal_ID;
     int currentAverage; //average of the network
     int currentSize = 0; //calculate size of network with inverse of average
-    int numOfCycles_total = 0; //lifetime count of cycles
+    int lifetimeCycles = 0; //lifetime count of cycles
+    int cyclesAtFirstRequest = 0;
     int currentCycles = 0;
     int cycleLimit = 20; //set to 20 be default
     boolean hasNodeAbove = false;
@@ -97,22 +104,25 @@ class NodeInfo{
     
     //conversation tracking
     boolean nodeIsFree = true;
-    int portLastSentTo;
+    int replyFromPort;
     long timeLastSent;
-    long timeoutTime = 3000;
+    long timeoutTime = 1500;
     boolean doubleToggle = false;
+
     BlockingQueue<GossipData> consoleQueue; //holds requests from the console
     BlockingQueue<GossipData> requestQueue; //holds requests from other nodes
     BlockingQueue<GossipData> conversationQueue; //holds replies to current conversation
+    BlockingQueue<String> transactionQueue;
+    HashMap<String, GossipData> activeTransactionStatusMap;
     //decision to use a queue for the current conversation is to allow ability to
     // potentially receive multiple replies, as we may in the future wish to be able to have
     // more than one conversation at a time (hence transID)
 
     
 
-    NodeInfo(int id, int serverPort){
-        this.nodeID = id;
-        this.serverPort = serverPort;
+    NodeInfo(int id, int sp){
+        nodeID = id;
+        serverPort = sp;
         generateNewValue(false); //populate our dataValue with a random value on construction
 
         //at this moment in time we are unaware of any node except ourself so these are all "true"
@@ -120,14 +130,28 @@ class NodeInfo{
         maxNetworkVal = dataValue;
         currentAverage = dataValue;
 
-        consoleQueue = new ArrayBlockingQueue<GossipData>(5);
-        requestQueue = new ArrayBlockingQueue<GossipData>(10);
-        conversationQueue = new ArrayBlockingQueue<GossipData>(5);
+        consoleQueue = new ArrayBlockingQueue<GossipData>(15);
+        requestQueue = new ArrayBlockingQueue<GossipData>(15);
+        conversationQueue = new ArrayBlockingQueue<GossipData>(15);
+        transactionQueue = new ArrayBlockingQueue<String>(10);
+        activeTransactionStatusMap = new HashMap<String, GossipData>();
+    }
+
+    public String createTransID(){
+        StringBuilder retStr = new StringBuilder();
+        retStr.append(lifetimeCycles);
+        retStr.append(".");
+        retStr.append(serverPort);
+        return retStr.toString();
     }
 
 
     public void startTransaction(){
         nodeIsFree = false;
+        timeLastSent = System.currentTimeMillis();
+    }
+
+    public void updateTransaction(){
         timeLastSent = System.currentTimeMillis();
     }
 
@@ -138,8 +162,15 @@ class NodeInfo{
 
     public void resetTransaction(){
         nodeIsFree = true;
-        // System.out.println("#>Transaction reset");
+        doubleToggle = false;
+        //clear this item from the head of the queue, and erase its history
+        activeTransactionStatusMap.remove(transactionQueue.remove());
 
+    }
+
+    public void updateCycles(){
+        lifetimeCycles++;
+        currentCycles++;
     }
 
     public void generateNewValue(boolean verbose){
@@ -161,7 +192,7 @@ class NodeInfo{
         "   NodeID: " + nodeID + " port: " + serverPort + "\n" +
         "   node Values (local value, avg, min, max): (" + dataValue + ", " + currentAverage + ", " + minNetworkVal + ", " + maxNetworkVal + ")\n" +
         "   current size: " + currentSize +
-        "   cycle Info (limit, lifetime): (" + cycleLimit + ", " + numOfCycles_total + ")\n" +
+        "   cycle Info (limit, lifetime): (" + cycleLimit + ", " + lifetimeCycles + ")\n" +
         "####################################################################################################\n";
 
     }
@@ -188,7 +219,7 @@ class GossipDirector extends Thread{
                     //there is a console request
                     incomingData = locals.consoleQueue.remove();
                     switch(incomingData.command){
-                        case AVG: break;
+                        case AVG: networkAverage(incomingData); break;
                         case DELNODE: break;
                         case KILLNET: break;
                         case LIFETIME: break;
@@ -207,7 +238,7 @@ class GossipDirector extends Thread{
                     //console queue is empty, service incoming requests
                     incomingData = locals.requestQueue.remove();
                     switch(incomingData.command){
-                        case AVG: break;
+                        case AVG: networkAverage(incomingData); break;
                         case DELNODE: break;
                         case KILLNET: break;
                         case LIFETIME: break;
@@ -225,10 +256,10 @@ class GossipDirector extends Thread{
 
             }else{
                 //we are in a conversation
-                if(!locals.conversationQueue.isEmpty()){
-                    incomingData = locals.conversationQueue.remove();
+                if((!locals.transactionQueue.isEmpty()) && (locals.activeTransactionStatusMap.get(locals.transactionQueue.peek()).msgType != messageTypes.REQUEST)){
+                    incomingData = locals.activeTransactionStatusMap.get(locals.transactionQueue.peek());
                     switch(incomingData.command){
-                        case AVG: break;
+                        case AVG: networkAverage(incomingData); break;
                         case DELNODE: break;
                         case KILLNET: break;
                         case LIFETIME: break;
@@ -242,11 +273,30 @@ class GossipDirector extends Thread{
                         case SIZE: break;
                         default: break;
                     }
-                }else if(locals.waitTimeExceeded()){
+                }
+
+                // if(!locals.conversationQueue.isEmpty()){
+                //     incomingData = locals.conversationQueue.remove();
+                //     switch(incomingData.command){
+                //         case AVG: networkAverage(incomingData); break;
+                //         case DELNODE: break;
+                //         case KILLNET: break;
+                //         case LIFETIME: break;
+                //         case MINMAX: break;
+                //         case NEWLIMIT: break;
+                //         case NEWVAL: break;
+                //         case NONE: break;
+                //         case PING: ping(incomingData); break;
+                //         case SHOWCOMMANDS: break;
+                //         case SHOWLOCALS: break;
+                //         case SIZE: break;
+                //         default: break;
+                //     }
+                else if(locals.waitTimeExceeded()){
                     //the wait time has been exceeded. 
                     //  dump the transaction and go service console and request queues
                     System.out.println("!!!!!WAIT TIME EXCEEDED, DROPPING TRANSACTION!!!!!!!");
-                    System.out.println("    Failed to receive reply from port: " + locals.portLastSentTo);
+                    System.out.println("    Failed to receive reply from port: " + locals.replyFromPort);
                     locals.resetTransaction();
                     
                 }
@@ -272,7 +322,6 @@ class GossipDirector extends Thread{
     // l
     private void displayLocals(GossipData inMessage){
         GossipData outMessage = new GossipData(inMessage);
-
         if(locals.doubleToggle == false) {
             System.out.println(locals);
         }
@@ -296,6 +345,7 @@ class GossipDirector extends Thread{
             case CONSOLE:
                 //treat this as normal
                 outMessage.msgType = messageTypes.REQUEST;
+                locals.replyFromPort = outMessage.targetPort;
                 sendMsg(outMessage, outMessage.targetPort); 
                 locals.startTransaction();
                 break;
@@ -307,20 +357,114 @@ class GossipDirector extends Thread{
                     System.out.println(", Node below is alive");
                 }
                 locals.resetTransaction();
+
                 break;
             case REQUEST:
                 outMessage.msgType = messageTypes.REPLY; //reply to requester
                 //sets the targetPort to that of the node we received the message from
-                outMessage.targetPort += inMessage.originatorID - locals.nodeID;
-                sendMsg(outMessage, outMessage.targetPort); //send to node above
+                // outMessage.targetPort += inMessage.originatorID - locals.nodeID;
+                sendMsg(outMessage, outMessage.nodePort);
                 break;
         }
+    }
+
+    private void networkAverage(GossipData inMessage){
+        //console initiates
+        GossipData outMessage = new GossipData(inMessage);
+        if(locals.currentCycles == 0){
+            //this would be the first time we are seeing this request
+            locals.cyclesAtFirstRequest = locals.lifetimeCycles;
+        }
+        switch(inMessage.msgType){
+            case CONSOLE:
+                //start a transaction, send our value, and our cycle count
+                outMessage.msgType = messageTypes.REQUEST;
+                outMessage.sentValue = locals.dataValue;
+                outMessage.cycleNumber = locals.currentCycles;
+                System.out.println("#####CONSOLE: " + outMessage.targetPort);
+                locals.replyFromPort = outMessage.targetPort;
+                sendMsg(outMessage, outMessage.targetPort);
+                locals.startTransaction();
+                break;
+            case REQUEST: 
+                //only do something with this if we have not reached the cycle limit
+                outMessage.msgType = messageTypes.REPLY; //prepare a reply
+                outMessage.average = (inMessage.sentValue + locals.dataValue) / 2; //calc the average but do not save it locally yet
+                System.out.println("#####REQUEST: " + inMessage.nodePort);
+                locals.replyFromPort = outMessage.targetPort;
+                sendMsg(outMessage, inMessage.nodePort);
+                locals.startTransaction();
+                break;
+            case REPLY: 
+                //we will receive the calculated average, back and need to send an ACK, and unlock
+                outMessage.msgType = messageTypes.ACK;
+                locals.currentAverage = inMessage.average;
+                System.out.println("#####REPLY(" + locals.currentCycles + "): " + inMessage.nodePort);
+                sendMsg(outMessage, inMessage.nodePort); //send back to requester
+                locals.updateCycles();
+                locals.resetTransaction();
+                break;
+            case ACK: 
+                //receive the ACK, complete the transaction
+                //we sent the average we calculated, but now we can save it with the receipt of the ACK
+                locals.currentAverage = inMessage.average;
+                locals.updateCycles();
+                locals.resetTransaction();
+                break;
+        }
+        if(locals.currentCycles >= locals.cycleLimit){
+            System.out.println("NETWORK AVERAGE RESULTS: Average at Node " + locals.nodeID + " -> " + locals.currentAverage);
+        }else if(inMessage.msgType == messageTypes.REPLY || inMessage.msgType == messageTypes.ACK){
+            //we need to send again to add additional cycles
+            //lets make a new request as if we were a console, to take advantage of the sendBothWays function
+            outMessage.msgType = messageTypes.CONSOLE; //will trigger sendBothWays
+            imitateConsole(outMessage);
+            //the CONSOLE case will be called again and everything else will be taken care of
+            System.out.println("#####propagating AVG");
+        }
+    }
+
+    private void imitateConsole(GossipData outMessage){
+        try{
+            DatagramSocket DGSocket = new DatagramSocket();
+            InetAddress IPAddress = InetAddress.getByName("localhost");
+    
+            //open a byte array output stream
+            ByteArrayOutputStream byteoutStream = new ByteArrayOutputStream();
+    
+            //use the byte out stream to send the serialized gossipObj
+            ObjectOutputStream outStream = new ObjectOutputStream(byteoutStream);
+            outStream.writeObject(outMessage);
+    
+            //the serialized data object is converted and stored in a byte array
+            //it is then placed into a datagram packet, and sent to the IPAddress and port
+            byte[] data = byteoutStream.toByteArray();
+            DatagramPacket sendPacket = new DatagramPacket(data, data.length, IPAddress, Gossip.serverPort);
+            DGSocket.send(sendPacket);
+            DGSocket.close();
+        }catch (UnknownHostException UHE){
+            System.out.println("\nCM: Unknown Host Exception.\n");
+            UHE.printStackTrace();
+        }catch (IOException IOE){
+            IOE.printStackTrace();
+        }
+
     }
 
     //v
     private void regenerateNetwork(GossipData inMessage){
         GossipData outMessage = new GossipData(inMessage);
-        locals.generateNewValue(true);
+        if(locals.doubleToggle == false) {
+            locals.generateNewValue(true);
+        }
+        if(inMessage.msgType == messageTypes.CONSOLE){
+            //toggle this, will prevent a double print on the originating node
+            locals.doubleToggle = !locals.doubleToggle;
+        }else{
+            //will be received from another node so need to pass along
+            outMessage.originatorID = inMessage.nodeID; //set the orignator to the node we received from
+            outMessage.targetPort +=  locals.nodeID - outMessage.originatorID; //send in the same direction i.e. propagate
+        }
         outMessage.msgType = messageTypes.REQUEST;
         sendMsg(outMessage, outMessage.targetPort);
     }
@@ -330,16 +474,22 @@ class GossipDirector extends Thread{
         try{
             if(targetPort >= 48100){
                 GossipData toSend = new GossipData(message);
+                if(message.msgType == messageTypes.REQUEST){
+                    message.transID = locals.createTransID();
+                    locals.transactionQueue.put(message.transID);
+                    locals.activeTransactionStatusMap.put(message.transID, message);
+                }
         
                 DatagramSocket DGSocket = new DatagramSocket();
                 InetAddress IPAddress = InetAddress.getByName("localhost");
                 ByteArrayOutputStream byteoutStream = new ByteArrayOutputStream();
                 ObjectOutputStream outStream = new ObjectOutputStream(byteoutStream);
 
-                toSend.nodeID = locals.nodeID;
-                outStream.writeObject(toSend);
+                message.nodeID = locals.nodeID;
+                message.nodePort = locals.serverPort;
+                outStream.writeObject(message);
                 
-                System.out.println("    Message sent -> Sender: " + locals.serverPort + ", to target: " + targetPort + " : " + toSend);
+                System.out.println("    Message sent -> Sender: " + locals.serverPort + ", to target: " + targetPort + " : " + message);
 
                 byte[] data = byteoutStream.toByteArray();
                 DatagramPacket sendPacket = new DatagramPacket(data, data.length, IPAddress, targetPort);
@@ -348,7 +498,7 @@ class GossipDirector extends Thread{
             }else{
                 System.out.println("#> GDir: target port out of bounds, skipping send, " + targetPort);
             }
-            locals.portLastSentTo = targetPort;
+            
         }catch(UnknownHostException UNH){
             UNH.printStackTrace();
         }catch(IOException IOE){
@@ -413,25 +563,33 @@ public class Gossip {
                             gossipObj.originatorID = nodeLocalInfo.nodeID;
                             switch(gossipObj.command){
                                 case PING: sendBothWays(gossipObj, nodeLocalInfo.consoleQueue); break;
+                                case NEWVAL: sendBothWays(gossipObj, nodeLocalInfo.consoleQueue); break;
                                 case SHOWLOCALS: sendBothWays(gossipObj, nodeLocalInfo.consoleQueue); break;
+                                case AVG: sendBothWays(gossipObj, nodeLocalInfo.consoleQueue); break;
                                 default: nodeLocalInfo.consoleQueue.add(gossipObj); break;
                             }
                             break;
                         }
                         case REQUEST: {
                             System.out.println("-REQUEST- RECEIVED FROM NODE: " + gossipObj.nodeID + " : " + gossipObj);
-                            nodeLocalInfo.requestQueue.add(gossipObj); 
+                            switch(gossipObj.command){
+                                case AVG: sendBothWays(gossipObj, nodeLocalInfo.requestQueue); break;
+                                default: nodeLocalInfo.requestQueue.add(gossipObj); break;
+                            }
+                            
                             break;
                         }
                         case REPLY:{
                             System.out.println("-REPLY- RECEIVED FROM NODE: " + gossipObj.nodeID + " : " + gossipObj);
-                            nodeLocalInfo.conversationQueue.add(gossipObj); 
+                            // nodeLocalInfo.conversationQueue.add(gossipObj); 
+                            nodeLocalInfo.activeTransactionStatusMap.replace(gossipObj.transID, gossipObj); //stores the reply
                             break;
                         } 
                         case ACK: 
                             System.out.println("-ACK- RECEIVED FROM NODE: " + gossipObj.nodeID + " : " + gossipObj);
                             //finalize values, reset flags, service next request, manager should handle this
-                            nodeLocalInfo.conversationQueue.add(gossipObj);
+                            // nodeLocalInfo.conversationQueue.add(gossipObj); 
+                            nodeLocalInfo.activeTransactionStatusMap.replace(gossipObj.transID, gossipObj);
                             break;
                         case NONE: break;
                         default: break;
