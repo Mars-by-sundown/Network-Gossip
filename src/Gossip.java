@@ -12,8 +12,6 @@ import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.HashMap;
 
-
-
 enum messageTypes {
     CONSOLE, 
     REQUEST, 
@@ -43,25 +41,21 @@ class gossipEntry{
     int cycle;
     boolean printed = false;
     long timeOfLastService;
-
 }
 
 class GossipData implements Serializable {
     int sentValue;
-    int average; //current average of network
     int highestVal; //highest value seen in the network
     int highestVal_ID;
     int lowestVal;  //lowest value seen in the network
     int lowestVal_ID;
 
     int targetPort; 
-
     int nodeID; //unique id of the sending node
-    int nodePort;
+    int nodePort; //port of the sending node
 
-    int originatorID;   //populated by the originator before starting a gossip session
-    String transID;
-    String gossipID;
+    String transID; //id of the transaction this is a part of
+    String gossipID; //id of the session this is a part of
     int cycleNumber = 0;
     boolean complete = false;
     messageTypes msgType = messageTypes.NONE; //tracks RRA or console
@@ -70,12 +64,10 @@ class GossipData implements Serializable {
     String messageString;
 
     public GossipData(){
-
     }
 
     public GossipData(GossipData copyFrom){
         this.sentValue = copyFrom.sentValue;
-        this.average = copyFrom.average;
         this.highestVal = copyFrom.highestVal;
         this.highestVal_ID = copyFrom.highestVal_ID;
         this.lowestVal = copyFrom.lowestVal;
@@ -83,15 +75,12 @@ class GossipData implements Serializable {
         this.targetPort = copyFrom.targetPort;
         this.nodeID = copyFrom.nodeID;
         this.nodePort = copyFrom.nodePort;
-        this.originatorID = copyFrom.originatorID;
         this.msgType = copyFrom.msgType;
         this.command = copyFrom.command;
         this.cycleNumber = copyFrom.cycleNumber;
         this.transID = copyFrom.transID;
         this.gossipID = copyFrom.gossipID;
         this.complete = copyFrom.complete;
-        
-
     }
 
     // public String toString(){
@@ -101,7 +90,6 @@ class GossipData implements Serializable {
 
 class NodeInfo{
     int nodeID;
-    InetAddress nodeIP;
     int serverPort;
     int dataValue; //random data value 
     int minNetworkVal;
@@ -111,10 +99,8 @@ class NodeInfo{
     int currentAverage; //average of the network
     int currentSize = 0; //calculate size of network with inverse of average
     int lifetimeCycles = 0; //lifetime count of cycles
-    int cyclesAtFirstRequest = 0;
     int currentCycles = 0;
     int cycleLimit = 5; //set to 20 be default
-    String currentGossipID;
     
     //conversation tracking
     boolean nodeIsFree = true;
@@ -124,26 +110,25 @@ class NodeInfo{
     boolean doubleToggle = false;
     boolean updownToggle = false;
 
-    BlockingQueue<String> transactionQueue; //orders transactions
-    HashMap<String, GossipData> transLastReceivedMap;
-    HashMap<String, GossipData> transLastSentMap;
-    HashMap<String, gossipEntry> gossipSessionMap;
-    //decision to use a queue for the current conversation is to allow ability to
-    // potentially receive multiple replies, as we may in the future wish to be able to have
-    // more than one conversation at a time (hence transID)
+    BlockingQueue<String> transactionQueue; //FIFO transaction queue, i.e. head is the current transaction we care about
+    HashMap<String, GossipData> transLastReceivedMap; //map of the last received packet for each transaction
+    HashMap<String, GossipData> transLastSentMap; //map of the last packet we sent for each transaction
 
-    
+    //a map of the active gossip sessions
+    //  key:gossipID, 
+    //  value: a structure that holds info related to the gossip session, information is local to each node
+    //      this should allow each node to keep track of how many times it has seen a piece of gossip
+    //      and also allow it to track if it should process it, has printed the output, or just ignore it entirely 
+    HashMap<String, gossipEntry> gossipSessionMap; 
 
     NodeInfo(int id, int sp){
         nodeID = id;
         serverPort = sp;
         generateNewValue(false); //populate our dataValue with a random value on construction
-
         //at this moment in time we are unaware of any node except ourself so these are all "true"
         minNetworkVal = dataValue;
         maxNetworkVal = dataValue;
         currentAverage = dataValue;
-
 
         transactionQueue = new ArrayBlockingQueue<String>(20);
         transLastReceivedMap = new HashMap<String, GossipData>();
@@ -158,11 +143,9 @@ class NodeInfo{
         return transLastReceivedMap.get(transactionQueue.peek()).msgType;
     }
 
-    
     public int toggleUpDown(){
         updownToggle = !updownToggle;
         if(updownToggle){
-            
             return 1;
         }else{
             return -1;
@@ -175,29 +158,23 @@ class NodeInfo{
         info.cycle = 0;
         info.timeOfLastService = System.currentTimeMillis();
         gossipSessionMap.put(info.ID, info);
-        currentGossipID = info.ID;
-        return currentGossipID;
-    }
-
-    public void newGossipSeen(String id){
-        gossipEntry info = new gossipEntry();
-        info.ID = id;
-        info.cycle = 0;
-        info.timeOfLastService = System.currentTimeMillis();
-        gossipSessionMap.put(info.ID, info);
+        return info.ID;
     }
 
     public boolean allowService(String ID){
         if(gossipSessionMap.containsKey(ID)){
             //we have seen messages from this gossip session before
             if(gossipSessionMap.get(ID).cycle >= cycleLimit){
-                //ignore
+                //ignore as we have reached out limit
                 return false;
             }
-            
         }else{
             //this is the first message we have received from this session
-            newGossipSeen(ID);
+            gossipEntry info = new gossipEntry();
+            info.ID = ID;
+            info.cycle = 0; //local count of times seen
+            info.timeOfLastService = System.currentTimeMillis();
+            gossipSessionMap.put(ID, info);
         }
         return true;
     }
@@ -207,7 +184,6 @@ class NodeInfo{
         entry.printed = true;
         gossipSessionMap.put(id, entry);
     }
-
 
     public String createTransID(){
         StringBuilder retStr = new StringBuilder();
@@ -220,7 +196,6 @@ class NodeInfo{
     public String originateNewTransaction(GossipData message, boolean orginator){
         if(orginator){
             message.transID = createTransID(); //make a transID
-            message.originatorID = nodeID;
         }
         transactionQueue.add(message.transID); //place in transaction queue for processing
         transLastReceivedMap.put(message.transID, message); //create an entry in the transaction map to hold replies
@@ -229,10 +204,6 @@ class NodeInfo{
 
     public void startTransaction(){
         nodeIsFree = false;
-        timeLastSent = System.currentTimeMillis();
-    }
-
-    public void updateTransaction(){
         timeLastSent = System.currentTimeMillis();
     }
 
@@ -248,10 +219,7 @@ class NodeInfo{
         transLastReceivedMap.remove(transactionQueue.remove());
     }
 
-
-
     public void updateCycles(String id){
-        currentCycles++;
         gossipEntry temp = gossipSessionMap.get(id);
         temp.cycle++;
         gossipSessionMap.put(id, temp);
@@ -263,7 +231,6 @@ class NodeInfo{
             System.out.println("  Generating new value");
             System.out.println("  -> old value : " + dataValue);
         }
-
         Random rng = new Random();
         dataValue = rng.nextInt(100);
         if(verbose){System.out.println("  -> new value : " + dataValue);}
@@ -281,12 +248,8 @@ class NodeInfo{
         "   current size: " + currentSize +
         "   cycle Info (limit, lifetime): (" + cycleLimit + ", " + lifetimeCycles + ")\n" +
         "####################################################################################################\n";
-
     }
 }
-
-
-
 
 class GossipDirector extends Thread{
     NodeInfo locals;
@@ -382,8 +345,7 @@ class GossipDirector extends Thread{
             locals.doubleToggle = !locals.doubleToggle;
         }else{
             //will be received from another node so need to pass along
-            outMessage.originatorID = inMessage.nodeID; //set the orignator to the node we received from
-            outMessage.targetPort +=  locals.nodeID - outMessage.originatorID; //send in the same direction i.e. propagate
+            outMessage.targetPort +=  locals.nodeID - inMessage.nodeID; //send in the same direction i.e. propagate
         }
         outMessage.msgType = messageTypes.REQUEST;
         sendMsg(outMessage, outMessage.targetPort);
@@ -414,10 +376,7 @@ class GossipDirector extends Thread{
             case REQUEST:
                 outMessage.msgType = messageTypes.REPLY; //reply to requester
                 //sets the targetPort to that of the node we received the message from
-                // outMessage.targetPort += inMessage.originatorID - locals.nodeID;
                 sendMsg(outMessage, outMessage.nodePort);
-
-
                 locals.resetTransaction(false);
                 break;
         }
@@ -536,8 +495,7 @@ class GossipDirector extends Thread{
             locals.doubleToggle = !locals.doubleToggle;
         }else{
             //will be received from another node so need to pass along
-            outMessage.originatorID = inMessage.nodeID; //set the orignator to the node we received from
-            outMessage.targetPort +=  locals.nodeID - outMessage.originatorID; //send in the same direction i.e. propagate
+            outMessage.targetPort +=  locals.nodeID - inMessage.nodeID; //send in the same direction i.e. propagate
         }
         outMessage.msgType = messageTypes.REQUEST;
         sendMsg(outMessage, outMessage.targetPort);
@@ -610,7 +568,6 @@ public class Gossip {
             DatagramSocket DGListenerSocket = new DatagramSocket(nodeLocalInfo.serverPort);
             //create a byte buffer to hold incoming packets
             byte[] incomingData = new byte[2048]; //can accept a message of 1024 bytes
-            // nodeLocalInfo.nodeIP =  InetAddress.getByName("localhost");
 
             boolean keepAlive = true; //keep the datagram listener running
             //loop to listen for incoming packets from consolemonitor or from other gossip servers
