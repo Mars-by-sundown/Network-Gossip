@@ -7,6 +7,8 @@
 
 import java.io.*;
 import java.net.*;
+import java.util.Timer;
+import java.util.TimerTask;
 import java.util.Random;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
@@ -55,15 +57,18 @@ class GossipData implements Serializable {
     int lowestVal;  //lowest value seen in the network
     int lowestVal_ID;
 
+
     int targetPort; 
     int nodeID; //unique id of the sending node
     int nodePort; //port of the sending node
+
 
     String transID; //id of the transaction this is a part of
     String gossipID; //id of the session this is a part of
     int cycleNumber = 0;
     int retries = 0;
     boolean boolVal = false;
+
     messageTypes msgType = messageTypes.NONE; //tracks RRA or console
     commands command = commands.NONE;  //holds what the command is
 
@@ -79,9 +84,7 @@ class GossipData implements Serializable {
         this.highestVal_ID = copyFrom.highestVal_ID;
         this.lowestVal = copyFrom.lowestVal;
         this.lowestVal_ID = copyFrom.lowestVal_ID;
-        this.targetPort = copyFrom.targetPort;
         this.nodeID = copyFrom.nodeID;
-        this.nodePort = copyFrom.nodePort;
         this.msgType = copyFrom.msgType;
         this.command = copyFrom.command;
         this.cycleNumber = copyFrom.cycleNumber;
@@ -111,6 +114,7 @@ class NodeInfo{
     
     boolean verboseMode = true;
     //conversation tracking
+
     boolean nodeIsFree = true;
     int replyFromPort;
     long timeLastSent;
@@ -133,6 +137,7 @@ class NodeInfo{
         nodeID = id;
         serverPort = sp;
         generateNewValue(false); //populate our dataValue with a random value on construction
+
         //at this moment in time we are unaware of any node except ourself so these are all "true"
         minNetworkVal = dataValue;
         maxNetworkVal = dataValue;
@@ -143,6 +148,7 @@ class NodeInfo{
         transLastSentMap = new HashMap<String, GossipData>();
         gossipSessionMap = new HashMap<String, gossipEntry>();
     }
+
 
     public messageTypes storedTransType(){
         //checks and returns the message type of the last received message with the current transID
@@ -483,7 +489,9 @@ class GossipDirector extends Thread{
                         locals.resetTransaction(false);
                     }
                     
+
                 }
+
             }
         }
     }
@@ -524,10 +532,11 @@ class GossipDirector extends Thread{
 
 
     // p
-    private void ping(GossipData inMessage){
-        GossipData outMessage = new GossipData(inMessage);
-        switch(inMessage.msgType){
+    private void ping(GossipData message, messageTypes pingType, int offset){
+        GossipData gossipObj = new GossipData(message);
+        switch(gossipObj.msgType){
             case CONSOLE:
+
                 //treat this as normal
                 outMessage.msgType = messageTypes.REQUEST;
                 locals.replyFromPort = outMessage.targetPort;
@@ -535,11 +544,19 @@ class GossipDirector extends Thread{
                 locals.startTransaction();
                 break;
             case REPLY:
-                System.out.print("#> Ping reply received from node: " + inMessage.nodeID);
-                if(inMessage.nodeID > locals.nodeID){
-                    System.out.println(", Node above is alive");
-                }else{
-                    System.out.println(", Node below is alive");
+                //we are receiving a response to our ping, mark that node as alive
+                locals.numRepliesExpected -= 1;
+                if(locals.numRepliesExpected == 0){
+                    locals.hasCurrentConv = false; //conversation over
+                }
+                System.out.println(locals.conversationQueue);
+                if(gossipObj.nodeID > locals.nodeID){
+                    locals.hasNodeAbove = true;
+                    System.out.println("#> ping results - Node Above: " + locals.hasNodeAbove +"\n");
+                }
+                if(gossipObj.nodeID < locals.nodeID){
+                    locals.hasNodeBelow = true;
+                    System.out.println("#> ping results - Node Below: " + locals.hasNodeBelow +"\n");
                 }
 
                 locals.resetTransaction(false);
@@ -743,11 +760,14 @@ class GossipDirector extends Thread{
 
     private void sendMsg(GossipData message, int targetPort){
         //sends a gossipData message to the recipient node
+
         try{
             if(targetPort != locals.serverPort){
                 DatagramSocket DGSocket = new DatagramSocket();
                 InetAddress IPAddress = InetAddress.getByName("localhost");
                 ByteArrayOutputStream byteoutStream = new ByteArrayOutputStream();
+
+                //use the byte out stream to send the serialized gossipObj
                 ObjectOutputStream outStream = new ObjectOutputStream(byteoutStream);
                 locals.lifetimeCycles++;
                 message.nodeID = locals.nodeID;
@@ -766,7 +786,6 @@ class GossipDirector extends Thread{
             // }else{
                 // System.out.println("#> GDir: target port out of bounds, skipping send, " + targetPort);
             }
-            
         }catch(UnknownHostException UNH){
             UNH.printStackTrace();
         }catch(IOException IOE){
@@ -774,12 +793,16 @@ class GossipDirector extends Thread{
         }catch(Exception e){
             e.printStackTrace();
         }
+
     }
 }
 
 
 public class Gossip {
     public static int serverPort = 48100;
+
+
+
     public static void main(String[] args) throws Exception{
         int NodeNumber = 0; //THIS COMES FROM FIRST ARGUMENT PASSED
         if(args.length > 0){
@@ -916,14 +939,14 @@ public class Gossip {
                     default: break;
                 }
             }
+
             //server clean up before end
             DGListenerSocket.close(); //close the socket before we shutdown
+
         } catch (SocketException SE){
             SE.printStackTrace();
         } catch (IOException IOE){
             IOE.printStackTrace();
-        } catch(ClassNotFoundException CNF) {
-            CNF.printStackTrace();
         }
     }
 
@@ -940,8 +963,6 @@ public class Gossip {
         locals.lifetimeCycles++;
         clonedMsg.transID  = locals.originateNewTransaction(clonedMsg, originator);
     }
-
-    
 }
 
 class ConsoleMonitor implements Runnable{
@@ -951,7 +972,7 @@ class ConsoleMonitor implements Runnable{
         try{
             String inString;
             do{
-                System.out.println("CM: Enter a string to send to the gossipServer, or type quit/stopserver: ");
+                System.out.println("#> CM: Enter a string to send to the gossipServer, or type quit/stopserver: ");
                 System.out.flush();
                 inString = consoleIn.readLine();
 
