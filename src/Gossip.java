@@ -532,9 +532,9 @@ class GossipDirector extends Thread{
 
 
     // p
-    private void ping(GossipData message, messageTypes pingType, int offset){
-        GossipData gossipObj = new GossipData(message);
-        switch(gossipObj.msgType){
+    private void ping(GossipData message){
+        GossipData outMessage = new GossipData(message);
+        switch(outMessage.msgType){
             case CONSOLE:
 
                 //treat this as normal
@@ -545,20 +545,12 @@ class GossipDirector extends Thread{
                 break;
             case REPLY:
                 //we are receiving a response to our ping, mark that node as alive
-                locals.numRepliesExpected -= 1;
-                if(locals.numRepliesExpected == 0){
-                    locals.hasCurrentConv = false; //conversation over
+                if(outMessage.nodeID > locals.nodeID){
+                    System.out.println("#> ping results - Node Above: " +  true +"\n");
                 }
-                System.out.println(locals.conversationQueue);
-                if(gossipObj.nodeID > locals.nodeID){
-                    locals.hasNodeAbove = true;
-                    System.out.println("#> ping results - Node Above: " + locals.hasNodeAbove +"\n");
+                if(outMessage.nodeID < locals.nodeID){
+                    System.out.println("#> ping results - Node Below: " + true +"\n");
                 }
-                if(gossipObj.nodeID < locals.nodeID){
-                    locals.hasNodeBelow = true;
-                    System.out.println("#> ping results - Node Below: " + locals.hasNodeBelow +"\n");
-                }
-
                 locals.resetTransaction(false);
                 break;
             case REQUEST:
