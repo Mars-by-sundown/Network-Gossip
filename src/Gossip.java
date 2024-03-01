@@ -1,10 +1,28 @@
-/*TODO:
-    -Change Base ServerPort
-    -Grab nodeNumber from arg pass
-    -handle different console commands
-    -implement queuing for incoming commands, must finish trades and calcs before beginning the next one
-*/
-
+/*
+ * Name: Nicholas Ragano
+ * Date: 03/01/2024
+ * Java Version: 21
+ * Command Line instructions:
+ *  >javac Gossip.java
+ * Instructions to run:
+ *  >java Gossip #
+ *  where # is a number 0-9 or left blank
+ * 
+ * Once running the user can type the following commands into the console
+ * 
+ *       t - show all commands
+ *       l - display local values on all nodes (l as in Lima)
+ *       p - ping neighbors of this node
+ *       m - calculate network min/max, display on all nodes
+ *       a - calculate network average, show on all nodes
+ *       z - calculate network size, show on all nodes
+ *       v - force new random values on network, all nodes
+ *       d - delete the current node
+ *       k - kill the network
+ *       N - N is an integer value, sets the cycle limit of the network (default 20)
+ * 
+ * 
+ */
 import java.io.*;
 import java.net.*;
 import java.util.Random;
