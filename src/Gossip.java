@@ -59,6 +59,7 @@ class GossipData implements Serializable {
     int highestVal_ID;
     int lowestVal;  //lowest value seen in the network
     int lowestVal_ID;
+    int sentInt;
 
     //sender information
     int senderID; //unique id of the sending node
@@ -73,6 +74,8 @@ class GossipData implements Serializable {
     messageTypes msgType = messageTypes.NONE; //tracks RRA or console
     commands command = commands.NONE;  //holds what the command is
 
+
+
     public GossipData(){
 
     }
@@ -85,6 +88,7 @@ class GossipData implements Serializable {
         this.highestVal_ID = copyFrom.highestVal_ID;
         this.lowestVal = copyFrom.lowestVal;
         this.lowestVal_ID = copyFrom.lowestVal_ID;
+        this.sentInt = copyFrom.sentInt;
 
         this.senderID = copyFrom.senderID;
         this.senderPort = copyFrom.senderPort;
@@ -124,6 +128,11 @@ class NodeInfo{
     boolean belowOpen = true;
     long resendTime = 750;
 
+    //keepAlives
+    boolean keepConsoleAlive = true; //kill first
+    boolean keepListenerAlive = true; //kill second
+    boolean keepDirectorAlive = true; //kill last
+    BufferedReader consoleIn = new BufferedReader(new InputStreamReader(System.in));
 
     BlockingQueue<String> gossipQueue;
     BlockingQueue<String> transactionQueue; //FIFO transaction queue, i.e. head is the current transID we care about
@@ -296,7 +305,7 @@ class NodeInfo{
     public void sendMsg(GossipData message, int targetPort){
         //sends a gossipData message to the recipient node
         try{
-            if(targetPort != serverPort){
+            if(message.command == commands.DELNODE || message.command == commands.KILLNET || targetPort != serverPort){
                 DatagramSocket DGSocket = new DatagramSocket();
                 InetAddress IPAddress = InetAddress.getByName("localhost");
                 ByteArrayOutputStream byteoutStream = new ByteArrayOutputStream();
@@ -313,8 +322,10 @@ class NodeInfo{
                 DGSocket.send(sendPacket);
                 transSentMap.put(message.transID, message);
                 updateGossipTime(message.gossipID);
+                byteoutStream.close();
+                outStream.close();
                 DGSocket.close();
-            }   
+            } 
         }catch(UnknownHostException UNH){
             UNH.printStackTrace();
         }catch(IOException IOE){
@@ -326,9 +337,10 @@ class NodeInfo{
 
     public void forward(GossipData message){
         //forwards message same direction it was headed
-        if(serverPort < 48109 && serverPort > 48100){
+        if((serverPort < 48109 && serverPort > 48100) || message.command == commands.KILLNET || message.command == commands.DELNODE){
             sendMsg(message, serverPort + (serverPort - message.senderPort));
         }
+        
 
     }
 
@@ -397,6 +409,14 @@ class NodeInfo{
         }
     }
 
+    public void printLifetime(){
+        System.out.println(
+            "####################################################################################################\n" +
+            "   " + " Lifetime cycles at node " + nodeID + " = " + lifetimeCycles + "\n" +
+            "####################################################################################################\n" 
+            );
+    }
+
     public String toString(){
         return 
         "####################################################################################################\n" +
@@ -410,7 +430,6 @@ class NodeInfo{
 
 class GossipDirector extends Thread{
     NodeInfo locals;
-    boolean keepAlive = true;
     GossipData incomingData; //will be pulled from a queue
     String currentTransID;
 
@@ -419,7 +438,7 @@ class GossipDirector extends Thread{
     }
 
     public void run(){
-        while(keepAlive){
+        while(locals.keepDirectorAlive){
             if(!locals.transactionQueue.isEmpty()){
                 currentTransID = locals.transactionQueue.peek(); //get the current transID at the head of the queue
                 incomingData = locals.transRecMap.get(currentTransID);
@@ -437,43 +456,21 @@ class GossipDirector extends Thread{
                 locals.updateGossipUpDownAwareness(incomingData); //tracks if we have seen messages for this gossip session from above and below
 
                 switch(locals.cmdOfLastReceived(currentTransID)){
-                    case AVG: 
-                        networkAverage(incomingData);
-                        break;
-                    case DELNODE:
-                        break;
-                    case KILLNET:
-                        break;
-                    case LIFETIME:
-                        break;
-                    case MINMAX:
-                        networkMinMax(incomingData);
-                        break;
-                    case NEWLIMIT:
-                        break;
-                    case NEWVAL:
-                        break;
-                    case PING: 
-                        ping(incomingData);
-                        break;
-                    case SHOWCOMMANDS:
-                        displayAllCommands();
-                        break;
-                    case SHOWLOCALS:
-                        displayLocals(incomingData);
-                        break;
-                    case SHOWQ: 
-                        locals.showQueueDetails();
-                        break;
-                    case SIZE:
-                        networkSize(incomingData);
-                        break;
-                    case VERBOSE:
-                        break;
-                    case NONE:
-                        break;
-                    default:
-                        break;
+                    case AVG:  networkAverage(incomingData); break;
+                    case DELNODE: killSelf(incomingData); break;
+                    case KILLNET: killNetwork(incomingData); break;
+                    case LIFETIME: showLifetime(incomingData); break;
+                    case MINMAX: networkMinMax(incomingData); break;
+                    case NEWLIMIT: setNewLimits(incomingData); break;
+                    case NEWVAL: regenerateNetwork(incomingData); break;
+                    case PING:  ping(incomingData); break;
+                    case SHOWCOMMANDS: displayAllCommands(); break;
+                    case SHOWLOCALS: displayLocals(incomingData); break;
+                    case SHOWQ:  locals.showQueueDetails(); break;
+                    case SIZE: networkSize(incomingData); break;
+                    case VERBOSE: break;
+                    case NONE: break;
+                    default: break;
 
                 }
                 // switch(locals.typeOfLastReceived(currentTransID)){
@@ -581,7 +578,6 @@ class GossipDirector extends Thread{
         locals.gossipQueue.remove();
         locals.lifetimeCycles++;
     }
-
 
     // p
     private void ping(GossipData inMessage){
@@ -886,7 +882,7 @@ class GossipDirector extends Thread{
         }
     }
 
-    // z
+    // m
     private void networkMinMax(GossipData inMessage){
         GossipData outMessage = new GossipData(inMessage);
         switch(locals.typeOfLastReceived(currentTransID)){
@@ -1032,23 +1028,122 @@ class GossipDirector extends Thread{
         }
     }
 
-    // // v
-    // private void regenerateNetwork(GossipData inMessage){
-    //     GossipData outMessage = new GossipData(inMessage);
-    //     if(locals.doubleToggle == false) {
-    //         locals.generateNewValue(true);
-    //     }
-    //     if(inMessage.msgType == messageTypes.CONSOLE){
-    //         //toggle this, will prevent a double print on the originating node
-    //         locals.doubleToggle = !locals.doubleToggle;
-    //     }else{
-    //         //will be received from another node so need to pass along
-    //         outMessage.targetPort +=  locals.nodeID - inMessage.nodeID; //send in the same direction i.e. propagate
-    //     }
-    //     outMessage.msgType = messageTypes.REQUEST;
-    //     sendMsg(outMessage, outMessage.targetPort);
-    //     locals.resetTransaction(locals.doubleToggle);
-    // }
+    // v
+    private void regenerateNetwork(GossipData inMessage){
+        GossipData outMessage = new GossipData(inMessage);
+        switch(locals.typeOfLastReceived(currentTransID)){
+            case CONSOLE:
+                locals.generateNewValue(locals.verboseMode);
+                outMessage.msgType = messageTypes.REQUEST;
+                locals.sendBothWays(outMessage);
+                break;
+            case REQUEST:
+                //we are receiving a request from another node
+                locals.forward(outMessage);
+                locals.generateNewValue(locals.verboseMode);
+                break;
+            default:
+                break;
+        }
+        locals.transactionQueue.remove();
+        locals.gossipQueue.remove();
+        locals.lifetimeCycles++;
+    }
+
+    private void showLifetime(GossipData inMessage){
+        GossipData outMessage = new GossipData(inMessage);
+        switch(locals.typeOfLastReceived(currentTransID)){
+            case CONSOLE:
+                locals.printLifetime();
+                outMessage.msgType = messageTypes.REQUEST;
+                locals.sendBothWays(outMessage);
+                break;
+            case REQUEST:
+                //we are receiving a request from another node
+                locals.forward(outMessage);
+                locals.printLifetime();
+                break;
+            default:
+                break;
+        }
+        locals.transactionQueue.remove();
+        locals.gossipQueue.remove();
+        locals.lifetimeCycles++;
+    }
+
+    private void setNewLimits(GossipData inMessage){
+        GossipData outMessage = new GossipData(inMessage);
+        switch(locals.typeOfLastReceived(currentTransID)){
+            case CONSOLE:
+                locals.cycleLimit = inMessage.sentInt;
+                outMessage.msgType = messageTypes.REQUEST;
+                locals.sendBothWays(outMessage);
+                break;
+            case REQUEST:
+                //we are receiving a request from another node
+                locals.forward(outMessage);
+                locals.cycleLimit = inMessage.sentInt;
+                break;
+            default:
+                break;
+        }
+        locals.transactionQueue.remove();
+        locals.gossipQueue.remove();
+        locals.lifetimeCycles++;
+    }
+
+    private void killSelf(GossipData inMessage){
+        long strt = System.currentTimeMillis();
+        try{
+            locals.keepConsoleAlive = false;
+            locals.consoleIn.close();
+            System.out.println("console closed");
+            System.out.println("Console false");
+            locals.keepListenerAlive = false;
+            System.out.println("Listener false");
+            locals.keepDirectorAlive = false;
+            System.out.println("Director false");
+            locals.sendMsg(inMessage, locals.serverPort);
+
+        }catch(IOException IOE){
+            IOE.printStackTrace();
+        }
+
+        
+    }
+
+    private void killNetwork(GossipData inMessage){
+        GossipData outMessage = new GossipData(inMessage);
+        long strt = System.currentTimeMillis();
+        switch(locals.typeOfLastReceived(currentTransID)){
+            case CONSOLE:
+                outMessage.msgType = messageTypes.REQUEST;
+                System.out.println("CONSOLE KILLNET");
+                locals.sendBothWays(outMessage);
+
+                while((System.currentTimeMillis() - strt) < 1000){
+                    //spin our wheels for 1 second
+                }
+                inMessage.command = commands.DELNODE;
+                killSelf(inMessage);
+
+                break;
+            case REQUEST:
+                //we are receiving a request from another node
+                System.out.println("REQUEST KILLNET");
+                locals.forward(outMessage);
+                while((System.currentTimeMillis() - strt) < 1000){
+                    //spin our wheels for 1 second
+                }
+                killSelf(inMessage);
+                break;
+            default:
+                break;
+        }
+        locals.transactionQueue.remove();
+        locals.gossipQueue.remove();
+        locals.lifetimeCycles++;
+    }
 }
 
 
@@ -1070,22 +1165,20 @@ public class Gossip {
 
         //Start a thread for our Gossip Director
         GossipDirector GDir = new GossipDirector(locals);
-        Thread GdirThread = new Thread(GDir);
+        Thread GdirThread = new Thread(GDir, "Director");
         GdirThread.start(); 
 
         //Start a thread for the ConsoleMonitor to listen for console commands
-        ConsoleMonitor CM = new ConsoleMonitor();
-        Thread CMThread = new Thread(CM);
+        ConsoleMonitor CM = new ConsoleMonitor(locals);
+        Thread CMThread = new Thread(CM, "Console Monitor");
         CMThread.start();
         try{
             //create our datagram listener socket
             DatagramSocket DGListenerSocket = new DatagramSocket(locals.serverPort);
             //create a byte buffer to hold incoming packets
             byte[] incomingData = new byte[2048]; //can accept a message of 1024 bytes
-
-            boolean keepAlive = true; //keep the datagram listener running
             //loop to listen for incoming packets from consolemonitor or from other gossip servers
-            while(keepAlive){
+            while(locals.keepListenerAlive){
                 //listen a receive packets
                 DatagramPacket incomingPacket = new DatagramPacket(incomingData, incomingData.length);
                 DGListenerSocket.receive(incomingPacket);
@@ -1111,7 +1204,6 @@ public class Gossip {
                         }
                     locals.transRecMap.put(inMessage.transID, inMessage);
                     locals.transactionQueue.add(inMessage.transID);
-
                     }
                 }
             }
@@ -1125,17 +1217,21 @@ public class Gossip {
     }
 }
 
-class ConsoleMonitor implements Runnable{
+class ConsoleMonitor extends Thread{
+    NodeInfo locals;
+    ConsoleMonitor(NodeInfo locals){
+        this.locals = locals;
+    }
     public void run(){
-        BufferedReader consoleIn = new BufferedReader(new InputStreamReader(System.in));
-        boolean keepAlive = true;
         try{
             String inString;
+            long checkForkilltime;
             do{
                 System.out.println("#> CM: Enter a string to send to the gossipServer, or type quit/stopserver: ");
                 System.out.flush();
-                inString = consoleIn.readLine();
+                checkForkilltime = System.currentTimeMillis();
 
+                inString = locals.consoleIn.readLine();
                 GossipData gossipObj = new GossipData();
                 gossipObj.messageString = inString;
                 gossipObj.msgType = messageTypes.CONSOLE;
@@ -1144,29 +1240,35 @@ class ConsoleMonitor implements Runnable{
                     //user requested to quit
                     System.out.println("#> CM: Exiting by user request.\n");
                     //call to quit process
-                    keepAlive = false;
+                    gossipObj.command = commands.DELNODE;
+
                 }else{
                     //else its something
-                    switch(inString){
-                        case "t": gossipObj.command = commands.SHOWCOMMANDS; break;
-                        case "l": gossipObj.command = commands.SHOWLOCALS; break;
-                        case "p": gossipObj.command = commands.PING; break;
-                        case "m": gossipObj.command = commands.MINMAX; break;
-                        case "a": gossipObj.command = commands.AVG; break;
-                        case "z": gossipObj.command = commands.SIZE; break;
-                        case "v": gossipObj.command = commands.NEWVAL; break;
-                        case "d": gossipObj.command = commands.DELNODE; break;
-                        case "k": gossipObj.command = commands.KILLNET; break;
-                        case "y": gossipObj.command = commands.LIFETIME; break;
-                        case "q": gossipObj.command = commands.SHOWQ; break;
-                        default: 
-                            gossipObj.command = commands.NONE;
-                            gossipObj.msgType = messageTypes.NONE;
-                            System.out.println("Unrecognized argument passed to GossipWorker");
-                            break;
+                    if(checkForInt(inString)){
+                        gossipObj.sentInt = Integer.parseInt(inString);
+                        gossipObj.command = commands.NEWLIMIT;
+                    }else{
+                        switch(inString){
+                            case "t": gossipObj.command = commands.SHOWCOMMANDS; break;
+                            case "l": gossipObj.command = commands.SHOWLOCALS; break;
+                            case "p": gossipObj.command = commands.PING; break;
+                            case "m": gossipObj.command = commands.MINMAX; break;
+                            case "a": gossipObj.command = commands.AVG; break;
+                            case "z": gossipObj.command = commands.SIZE; break;
+                            case "v": gossipObj.command = commands.NEWVAL; break;
+                            case "d": gossipObj.command = commands.DELNODE; break;
+                            case "k": gossipObj.command = commands.KILLNET; break;
+                            case "y": gossipObj.command = commands.LIFETIME; break;
+                            case "q": gossipObj.command = commands.SHOWQ; break;
+                            default: 
+                                gossipObj.command = commands.NONE;
+                                gossipObj.msgType = messageTypes.NONE;
+                                System.out.println("Unrecognized argument passed to GossipWorker");
+                                break;
+                        }
                     }
-                }   
 
+                }   
                 try{
                     DatagramSocket DGSocket = new DatagramSocket();
                     InetAddress IPAddress = InetAddress.getByName("localhost");
@@ -1183,15 +1285,31 @@ class ConsoleMonitor implements Runnable{
                     byte[] data = byteoutStream.toByteArray();
                     DatagramPacket sendPacket = new DatagramPacket(data, data.length, IPAddress, Gossip.serverPort);
                     DGSocket.send(sendPacket);
+                    outStream.close();
+                    byteoutStream.close();
                     DGSocket.close();
 
                 }catch (UnknownHostException UHE){
                     System.out.println("\nCM: Unknown Host Exception.\n");
                     UHE.printStackTrace();
                 }
-            }while(true);
+                if(gossipObj.command == commands.DELNODE || gossipObj.command == commands.KILLNET){
+                    locals.keepConsoleAlive = false;
+                }
+            }while(locals.keepConsoleAlive);
+            locals.consoleIn.close();
+            System.out.println("CONSOLE MONITOR KILLED");
         }catch (IOException IOE){
             IOE.printStackTrace();
+        }
+    }
+
+    private boolean checkForInt(String inString){
+        try{
+            int temp = Integer.parseInt(inString);
+            return true;
+        }catch(NumberFormatException NFE){
+            return false;
         }
     }
 }
