@@ -107,9 +107,9 @@ class NodeInfo{
     int nodeID;
     int serverPort;
     int dataValue; //random data value 
-    float minNetworkVal;
+    int minNetworkVal;
     int minNetworkVal_ID;
-    float maxNetworkVal;
+    int maxNetworkVal;
     int maxNetworkVal_ID;
     float average; //average of the network
     float size; //calculate size of network with inverse of average
@@ -143,6 +143,8 @@ class NodeInfo{
 
         //at this moment in time we are unaware of any node except ourself so these are all "true"
         minNetworkVal = dataValue;
+        minNetworkVal_ID = nodeID;
+        maxNetworkVal_ID = nodeID;
         maxNetworkVal = dataValue;
         average = dataValue;
         size = 1;
@@ -445,6 +447,7 @@ class GossipDirector extends Thread{
                     case LIFETIME:
                         break;
                     case MINMAX:
+                        networkMinMax(incomingData);
                         break;
                     case NEWLIMIT:
                         break;
@@ -669,6 +672,7 @@ class GossipDirector extends Thread{
                         outMessage.sentValue = locals.size; //reply with our current size
                         locals.lifetimeCycles++;
                         locals.sendMsg(outMessage, inMessage.senderPort); // return to sender
+                        locals.addGossipCycles(inMessage.gossipID, 1); //complete the gossip cycle
                         locals.nodeIsFree = false; //lock our node until we receive an ACK
                     }
                 }else{
@@ -700,7 +704,7 @@ class GossipDirector extends Thread{
                 //we are receiving and ACK to our Reply
                 locals.size = inMessage.sentValue; //save the new average that was sent to us
                 locals.nodeIsFree = true; //free our node
-                locals.addGossipCycles(inMessage.gossipID, 1); //complete the gossip cycle
+                // locals.addGossipCycles(inMessage.gossipID, 1); //complete the gossip cycle
                 locals.transactionQueue.remove(); //remove this transID from the queue, its done
 
                 //if we are an emitter then emit to our other neighbor
@@ -800,6 +804,7 @@ class GossipDirector extends Thread{
                         outMessage.sentValue = locals.average; //reply with our current AVG
                         locals.lifetimeCycles++;
                         locals.sendMsg(outMessage, inMessage.senderPort); // return to sender
+                        locals.addGossipCycles(inMessage.gossipID, 1); //we have completed a gossip cycle at this node
                         locals.nodeIsFree = false; //lock our node until we receive an ACK
                     }
                 }else{
@@ -831,7 +836,7 @@ class GossipDirector extends Thread{
                 //we are receiving and ACK to our Reply
                 locals.average = inMessage.sentValue; //save the new average that was sent to us
                 locals.nodeIsFree = true; //free our node
-                locals.addGossipCycles(inMessage.gossipID, 1); //complete the gossip cycle
+                // locals.addGossipCycles(inMessage.gossipID, 1); //complete the gossip cycle
                 locals.transactionQueue.remove(); //remove this transID from the queue, its done
 
                 //if we are an emitter then emit to our other neighbor
@@ -873,6 +878,152 @@ class GossipDirector extends Thread{
             System.out.println(
                 "\n####################################################################################################\n" +
                 "   " + "Average at node(value): " + locals.nodeID + "(" + locals.dataValue + ") = " + locals.average +
+                "\n####################################################################################################\n");
+            locals.setGossipPrinted(inMessage.gossipID); //set that we have printed the output
+            locals.aboveOpen = true;
+            locals.belowOpen = true;
+            locals.gossipQueue.remove();
+        }
+    }
+
+    // z
+    private void networkMinMax(GossipData inMessage){
+        GossipData outMessage = new GossipData(inMessage);
+        switch(locals.typeOfLastReceived(currentTransID)){
+            case CONSOLE:
+                //this is us originating a session
+                outMessage.msgType = messageTypes.START; //set START
+                //send it both directions
+                locals.setStartSeen(outMessage.gossipID);
+                locals.sendBothWays(outMessage); //send both ways
+
+                //if we are an emitting node we can emit our request down
+                if(locals.isEmitter()){
+                    locals.lifetimeCycles++;
+                    locals.emit(outMessage, false);
+                }
+                locals.transactionQueue.remove(); //remove this CONSOLE transaction from the queue
+                break;
+
+            case START:
+                //we receive a start from another node
+                if(!locals.gossipMap.get(inMessage.gossipID).startSeen){
+                    //if its the first time we have a seen a START message for this gossipID
+                    locals.setStartSeen(inMessage.gossipID); //mark that we have seen one
+                    //forward this START message
+                    // outMessage.transID = locals.createTransID(); // make a new transID each time we forward the start
+                    System.out.println("FORWARDING: " + outMessage.msgType + ":" + outMessage.command + " -- " + outMessage.transID);
+                    locals.forward(outMessage); //forward the start message
+                    //remove this START transaction from the queue
+                    locals.transactionQueue.remove();
+
+                    //if we are an emitter, then send our request down
+                    if(locals.isEmitter()){
+                        locals.emit(outMessage,false); //sends down
+                    }
+                }else{
+                    //we have seen a START so just dump this one it has no use
+                    System.out.println("Start from: " + inMessage.senderPort + " was dumped");
+                    locals.transactionQueue.remove();
+                }
+                break;
+            case REQUEST:
+                if(locals.getGossipCycles(inMessage) < locals.cycleLimit){
+                    if(locals.nodeIsFree){
+                        //we can fulfill this request
+                        outMessage.msgType = messageTypes.REPLY; //set reply
+                        outMessage.lowestVal = locals.minNetworkVal;
+                        outMessage.lowestVal_ID = locals.minNetworkVal_ID;
+                        outMessage.highestVal = locals.maxNetworkVal;
+                        outMessage.highestVal_ID = locals.maxNetworkVal_ID;
+                        locals.lifetimeCycles++;
+                        locals.sendMsg(outMessage, inMessage.senderPort); // return to sender
+                        locals.addGossipCycles(inMessage.gossipID, 1); //complete the gossip cycle
+                        locals.nodeIsFree = false; //lock our node until we receive an ACK
+                    }
+                }else{
+                    //tell them we are done and will not accept
+                    outMessage.msgType = messageTypes.FIN;
+                    outMessage.lowestVal = locals.minNetworkVal;
+                    outMessage.lowestVal_ID = locals.minNetworkVal_ID;
+                    outMessage.highestVal = locals.maxNetworkVal;
+                    outMessage.highestVal_ID = locals.maxNetworkVal_ID;
+                    locals.sendMsg(outMessage, inMessage.senderPort);
+                    locals.transactionQueue.remove(); //clear it from the queue of it
+                }
+                break;
+            case REPLY:
+                //we are receiving a reply to a request that we sent some time ago
+                if(inMessage.lowestVal < locals.minNetworkVal){
+                    locals.minNetworkVal = inMessage.lowestVal;
+                    locals.minNetworkVal_ID = inMessage.lowestVal_ID;
+                }
+                if(inMessage.highestVal > locals.maxNetworkVal){
+                    locals.maxNetworkVal = inMessage.highestVal;
+                    locals.maxNetworkVal_ID = inMessage.highestVal_ID;
+                }
+                outMessage.msgType = messageTypes.ACK; //set ACK
+                outMessage.lowestVal = locals.minNetworkVal;
+                outMessage.lowestVal_ID = locals.minNetworkVal_ID;
+                outMessage.highestVal = locals.maxNetworkVal;
+                outMessage.highestVal_ID = locals.maxNetworkVal_ID;
+                locals.lifetimeCycles++; //add a cycle to lifetime
+                locals.addGossipCycles(inMessage.gossipID, 1); //we have completed a gossip cycle at this node
+                locals.sendMsg(outMessage, inMessage.senderPort);   //return response to sender
+                locals.transactionQueue.remove(); //clear this transaction, we are done
+
+
+                //if we are an emitter and can emit, then try and trade with other partner by using forward
+                if(locals.isEmitter() && locals.getGossipCycles(outMessage) < locals.cycleLimit){
+                    locals.emit(inMessage, true);
+                }
+                break;
+
+            case ACK:
+                //we are receiving and ACK to our Reply
+                locals.minNetworkVal = inMessage.lowestVal;
+                locals.minNetworkVal_ID = inMessage.lowestVal_ID;
+                locals.maxNetworkVal = inMessage.highestVal;
+                locals.maxNetworkVal_ID = inMessage.highestVal_ID;
+                locals.nodeIsFree = true; //free our node
+                // locals.addGossipCycles(inMessage.gossipID, 1); //complete the gossip cycle
+                locals.transactionQueue.remove(); //remove this transID from the queue, its done
+
+                //if we are an emitter then emit to our other neighbor
+                if(locals.isEmitter() && locals.getGossipCycles(outMessage) < locals.cycleLimit){
+                    locals.emit(inMessage, true); 
+                }
+
+                break;
+
+            case FIN:
+                //we got a FIN, so this transaction isnt going to happen
+                if(inMessage.senderPort > locals.serverPort){
+                    //close node above us
+                    locals.aboveOpen = false;
+                }
+                if(inMessage.senderPort < locals.serverPort){
+                    //close the node below us
+                    locals.belowOpen = false;
+                }
+                if((!locals.aboveOpen && !locals.belowOpen) || (!locals.nodeSeenAbove(inMessage) || !locals.nodeSeenBelow(inMessage))){
+                    //if both above and below are closed OR we have not yet seen a message from one of the directions then finish the cycle at this node
+                    gossipEntry entry = locals.gossipMap.get(inMessage.gossipID);
+                    entry.cycle = locals.cycleLimit;
+                    locals.gossipMap.put(entry.GID, entry);
+                    System.out.println("FORCED COMPLETION");
+
+                }
+                locals.transactionQueue.remove(); //remove the fin
+                locals.nodeIsFree = true; //free our node if not already free
+                break;
+        }
+        if(locals.getGossipCycles(inMessage) >= locals.cycleLimit && !locals.gossipMap.get(inMessage.gossipID).printed){
+            System.out.println(
+                "\n####################################################################################################\n" +
+                "   " + "Min-Max at node " + locals.nodeID + "\n" +
+                "       " + "Max: node " + locals.maxNetworkVal_ID + " = " + locals.maxNetworkVal + "\n" +
+                "       " + "Min: node " + locals.minNetworkVal_ID + " = " + locals.minNetworkVal + "\n" +
                 "\n####################################################################################################\n");
             locals.setGossipPrinted(inMessage.gossipID); //set that we have printed the output
             locals.aboveOpen = true;
